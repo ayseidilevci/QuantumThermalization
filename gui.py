@@ -917,7 +917,7 @@ class ControlPanel(QWidget):
         self._last_rho = rho
         fig = self.rho_canvas.fig
         fig.clear()
-        fig.subplots_adjust(left=0.02, right=0.88, bottom=0.05, top=0.92)
+        fig.subplots_adjust(left=0.02, right=0.82, bottom=0.05, top=0.92)
         ax = fig.add_subplot(111, projection="3d")
         ax.set_facecolor(p.SURFACE)
         # 3D pane chrome: dark panes + hairline edges instead of matplotlib's
@@ -948,7 +948,7 @@ class ControlPanel(QWidget):
 
         # cyclic phase colorbar (-\u03c0..\u03c0), the accessible key to the color channel
         sm = cm.ScalarMappable(cmap=cm.twilight, norm=mcolors.Normalize(vmin=-np.pi, vmax=np.pi))
-        cbar = fig.colorbar(sm, ax=ax, shrink=0.55, pad=0.02, ticks=[-np.pi, 0, np.pi])
+        cbar = fig.colorbar(sm, ax=ax, shrink=0.55, pad=0.15, ticks=[-np.pi, 0, np.pi])
         cbar.ax.set_yticklabels(["\u2212\u03c0", "0", "\u03c0"], color=p.TEXT_DIM)
         cbar.set_label("phase", color=p.TEXT_DIM, fontsize=9)
         cbar.outline.set_edgecolor(p.BORDER)
