@@ -3,3 +3,4 @@ qiskit-aer
 numpy
 scipy
 matplotlib
+qiskit-quantuminspire
