@@ -2,18 +2,23 @@ from backend.qi_manager import QuantumInspireManager
 
 from qiskit import QuantumCircuit
 
-def test_login():
 
-    manager = QuantumInspireManager()
-    manager.login()
+def test_login(manager):
 
+    def login_finished(return_code):
+        if return_code == 0:
+            print("Login successful!")
+            # Continue UI flow
+        else:
+            print("Login failed!")
 
-    # if test1.check_login():
-    #     print("login in checked correctly!")
+    manager.login(login_finished)
 
-    # provider = test1.provider
-    # backend = provider.get_backend("QX emulator")
-    # submit_testing_circut(test1, backend)
+    if manager.check_login():
+        print("login in checked correctly!")
+
+def test_provider(manager):
+    manager.set_provider()
 
 def submit_testing_circut(user, backend):
     # Create a basic Bell State circuit:
@@ -33,4 +38,11 @@ def submit_testing_circut(user, backend):
     print(result.get_counts())
 
 if __name__ == "__main__":
-    test_login()
+
+    manager = QuantumInspireManager()
+
+    # print("login test!")
+    # test_login(manager)
+
+    print("provider test!")
+    test_provider(manager)
