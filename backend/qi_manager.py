@@ -122,14 +122,12 @@ class QuantumInspireManager:
 
             self.backends.append(backend_info)
 
-        # Print everything at the end
-        for backend in self.backends:
-            print(
-                f"Backend: {backend.name}, "
-                f"ID: {backend.id}, "
-                f"Status: {backend.status}"
-            )
-
+        # for backend in self.backends:
+        #     print(
+        #         f"Backend: {backend.name}, "
+        #         f"ID: {backend.id}, "
+        #         f"Status: {backend.status}"
+        #     )
 
 
     def update_provider(self):
@@ -138,7 +136,3 @@ class QuantumInspireManager:
 
     def submit(self, circuit, backend):
         return backend.run(circuit)
-
-    def get_result(self, job):
-        return job.result()
-
