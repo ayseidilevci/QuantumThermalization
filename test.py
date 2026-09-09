@@ -1,3 +1,4 @@
+from io import open_code
 from backend.qi_manager import QuantumInspireManager
 from qi_utilities.utility_functions.data_handling import StoreProjectRecord, RetrieveProjectRecord
 
@@ -7,17 +8,13 @@ from qiskit.visualization import plot_histogram
 
 def test_login(manager):
 
-    def login_finished(return_code):
-        if return_code == 0:
-            print("Login successful!")
-            # Continue UI flow
-        else:
-            print("Login failed!")
+    def show_code(code):
+        print(code)
 
-    manager.login(login_finished)
+    def login_return(code):
+        print(code)
 
-    if manager.check_login():
-        print("login in checked correctly!")
+    manager.login(on_code=show_code, on_complete=login_return)
 
 def test_provider(manager):
     manager.set_provider()
@@ -48,17 +45,19 @@ def test_submit_circut(manager):
     loaded_job = RetrieveProjectRecord(job_id)
     lodead_results = loaded_job.get_counts()
     print(lodead_results)
-        
+
+ 
 if __name__ == "__main__":
 
     manager = QuantumInspireManager()
 
-    # print("login test!")
-    # test_login(manager)
+    print("login test!")
 
-    print("provider test!")
-    test_provider(manager)
+    test_login(manager)
 
-    print("submit circuit test!")
-    job = test_submit_circut(manager)
+    # print("provider test!")
+    # test_provider(manager)
+    #
+    # print("submit circuit test!")
+    # job = test_submit_circut(manager)
 

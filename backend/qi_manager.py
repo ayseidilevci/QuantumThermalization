@@ -1,16 +1,12 @@
-# QuantumBackend funtions
-
-import subprocess
-
-from qiskit_quantuminspire.qi_provider import QIProvider
-
-import subprocess
-import threading
 import os
 import re
-
+import subprocess
+import threading
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
+
+from qiskit_quantuminspire.qi_provider import QIProvider
 
 
 @dataclass
@@ -20,21 +16,39 @@ class BackendInfo:
     id: int
     status: Any
 
+
 class QuantumInspireManager:
+
     def __init__(self):
-        """
-        Create the Quantum Inspire provider after authentication has been completed.
-        """
         self.backends = []
         self.provider = None
+
         self.userID = None
         self.login_code = None
+
         self.STANDARD_BACKEND = "QX Emulator"
 
-    def login(self, on_complete):
+    def login(
+        self,
+        on_code: Callable[[str], None],
+        on_complete: Callable[[int], None],
+    ):
+        """
+        Start the Quantum Inspire CLI login in the background.
+
+        on_code(code):
+            called when the QI activation code is detected.
+
+        on_complete(return_code):
+            called when the login process finishes.
+        """
 
         def worker():
-            env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+
+            env = {
+                **os.environ,
+                "PYTHONUNBUFFERED": "1",
+            }
 
             process = subprocess.Popen(
                 ["qi", "login"],
@@ -45,6 +59,7 @@ class QuantumInspireManager:
             )
 
             if process.stdout is not None:
+
                 while True:
                     line = process.stdout.readline()
 
@@ -53,54 +68,86 @@ class QuantumInspireManager:
 
                     line = line.strip()
 
-                    # Parse login code
                     code_match = re.search(
                         r"user_code=([A-Z0-9-]+)",
-                        line
+                        line,
                     )
 
                     if code_match:
                         self.login_code = code_match.group(1)
 
-                    # Parse user ID
+                        if on_code is not None:
+                            on_code(self.login_code)
+
                     user_id_match = re.search(
                         r"member ID (\d+)",
-                        line
+                        line,
                     )
 
                     if user_id_match:
-                        self.userID = int(user_id_match.group(1))
+                        self.userID = int(
+                            user_id_match.group(1)
+                        )
 
             return_code = process.wait()
 
-            on_complete(return_code)
-
-            print("QI: ", self.userID)
-            print("QI: ", self.login_code)
+            if on_complete is not None:
+                on_complete(return_code)
 
         threading.Thread(
             target=worker,
-            daemon=False
+            daemon=True,
         ).start()
 
-    def check_login(self):
-        return os.path.exists("~/.quantuminspire/config.json")
-        
-    def set_provider(self):
+    def check_login(self) -> bool:
+        """
+        Check whether the existing Quantum Inspire credentials
+        can actually be used.
 
+        Returns:
+            True  -> existing authentication works
+            False -> login is required
+        """
+
+        config_path = (
+            Path.home() / ".quantuminspire" / "config.json"
+        )
+
+        if not config_path.exists():
+            return False
+
+        try:
+            provider = QIProvider()
+            provider.backends()
+
+            self.provider = provider
+
+            return True
+
+        except Exception as exc:
+            print(f"QI authentication check failed: {exc}")
+
+            self.provider = None
+
+            return False
+
+    def set_provider(self):
         self.provider = QIProvider()
 
+        self.backends = []
+
         for backend in self.provider.backends():
+
             backend_string = str(backend)
 
             name_match = re.search(
                 r"name=([^,]+)",
-                backend_string
+                backend_string,
             )
 
             id_match = re.search(
                 r"id=(\d+)",
-                backend_string
+                backend_string,
             )
 
             if name_match is None or id_match is None:
@@ -109,29 +156,18 @@ class QuantumInspireManager:
             name = name_match.group(1).strip()
             backend_id = int(id_match.group(1))
 
-            # Get current backend status
             status = backend.status
 
-            # Create our backend structure
             backend_info = BackendInfo(
                 backend=backend,
                 name=name,
                 id=backend_id,
-                status=status
+                status=status,
             )
 
             self.backends.append(backend_info)
 
-        # for backend in self.backends:
-        #     print(
-        #         f"Backend: {backend.name}, "
-        #         f"ID: {backend.id}, "
-        #         f"Status: {backend.status}"
-        #     )
-
-
     def update_provider(self):
-        print("Provider updated!")
         self.provider = QIProvider()
 
     def submit(self, circuit, backend):
