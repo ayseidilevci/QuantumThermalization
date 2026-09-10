@@ -5,3 +5,4 @@ scipy
 matplotlib
 qiskit-quantuminspire
 quantuminspire
+qi-utilities

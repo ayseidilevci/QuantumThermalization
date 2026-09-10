@@ -1,7 +1,7 @@
-from qiskit.quantum_info import Statevector, Pauli
-import numpy as np
-from tfd_circuit import TFDCircuit
+from qiskit.quantum_info import Pauli
 from scipy.optimize import minimize
+
+from .tfd_circuit import TFDCircuit
 
 # q0 = A2
 # q1 = A1

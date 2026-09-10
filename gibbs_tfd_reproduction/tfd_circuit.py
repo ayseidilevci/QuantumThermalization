@@ -29,3 +29,6 @@ class TFDCircuit:
 
     def get_state_vector(self):
         return Statevector(self.circuit)
+    
+    def as_qiskit_circuit(self) -> QuantumCircuit:
+        return self.circuit
