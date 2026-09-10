@@ -10,13 +10,16 @@ Quantum thermal state preparation via a quantum computer on the Quantum Inspire 
 
 2. Create a virtual environment
 ```bash
-   python -m venv venv
+   python -m venv <env_name>
 ```
 
 3. Activate the virtual environment
 ```bash
-   # macOS/Linux
+   # macOS
    source venv/bin/activate
+
+   # Linux 
+   source bin/activate
 
    # Windows
    venv\Scripts\activate
@@ -38,5 +41,6 @@ The implementation relies primarily on:
 
 - Qiskit
 - NumPy
+- QuantumInspire
 
 Experiments were developed and tested using Python 3.12.
