@@ -60,7 +60,11 @@ def run():
         screen.center() - window.rect().center()
     )
 
+    send_circuit(manager=manager)
+    sys.exit(app.exec())
 
+
+def send_circuit(manager):
     betas = [0.02, 0.2, 1, 5, 50] 
     cost_function = CostFunction(varsigma=1.57)
     x0 = np.array([0.0, 0.0, 0.0, 0.0])
@@ -90,13 +94,16 @@ def run():
         job = manager.submit(transpile(qc.as_qiskit_circuit(), backend), backend)
         job_id = str(job.circuits_run_data[0].job_id)
 
+        job_result = job.result()
+        counts = job_result.data()["counts"]
+        print(counts)
+
         StoreProjectRecord(job)
 
         loaded_job = RetrieveProjectRecord(job_id)
         loaded_results = loaded_job.get_counts()
         print(loaded_results)
 
-    sys.exit(app.exec())
 
 if __name__ == "__main__":
     run()
