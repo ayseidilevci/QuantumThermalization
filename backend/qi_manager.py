@@ -26,7 +26,7 @@ class QuantumInspireManager:
         self.userID = None
         self.login_code = None
 
-        self.STANDARD_BACKEND = "QX Emulator"
+        self.STANDARD_BACKEND = "QX emulator"
 
     def login(
         self,
@@ -132,6 +132,8 @@ class QuantumInspireManager:
             return False
 
     def set_provider(self):
+        print("Connecting to Quantum Inspire...")
+
         self.provider = QIProvider()
 
         self.backends = []
@@ -167,8 +169,60 @@ class QuantumInspireManager:
 
             self.backends.append(backend_info)
 
+        print(f"Found {len(self.backends)} backends.")
+
+        return self.provider
+
     def update_provider(self):
         self.provider = QIProvider()
 
-    def submit(self, circuit, backend):
-        return backend.run(circuit)
+    def submit_circuit(self, circuit, backend):
+        """
+        Submit a Qiskit QuantumCircuit to the selected QI backend.
+        """
+
+        print("========================================")
+        print("Submitting circuit to Quantum Inspire")
+        print("========================================")
+
+        print("\nCircuit:")
+        print(circuit)
+
+        print("\nBackend:")
+        print(backend)
+
+        try:
+            job = backend.run(circuit)
+
+            print("\nJob submitted successfully.")
+            print("Job ID:", job.circuits_run_data[0].job_id)
+
+            print("\nWaiting for results...")
+            results = job.result()
+
+            print("\nResults:")
+            print(results)
+
+            print("\nResult data:")
+            print(results.data())
+
+            return job, results
+
+        except Exception as exc:
+            print("\nERROR submitting circuit:")
+            print(exc)
+
+            return None, None
+
+    def get_backend(self, name=None):
+
+        if name is None:
+            name = self.STANDARD_BACKEND
+        #
+        # if self.provider is None:
+        #     self.set_provider()
+        
+        self.provider = QIProvider()
+
+        return self.provider.get_backend(name)
+

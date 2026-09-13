@@ -42,7 +42,7 @@ class LoginWindow(QWidget):
         # -------------------------------------------------
 
         self.title = QLabel(
-            "Quantum Inspire Experiment"
+            "Time to some fun with, QI Experiment"
         )
 
         self.title.setAlignment(Qt.AlignCenter)
@@ -52,21 +52,6 @@ class LoginWindow(QWidget):
         title_font.setBold(True)
 
         self.title.setFont(title_font)
-
-        # -------------------------------------------------
-        # Subtitle
-        # -------------------------------------------------
-
-        self.subtitle = QLabel(
-            "Time to some fun with, QI Experiment"
-        )
-
-        self.subtitle.setAlignment(Qt.AlignCenter)
-
-        subtitle_font = QFont()
-        subtitle_font.setPointSize(18)
-
-        self.subtitle.setFont(subtitle_font)
 
         # -------------------------------------------------
         # Start button
@@ -83,7 +68,7 @@ class LoginWindow(QWidget):
         self.start_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {Colors.BG_2};
-                color: {Colors.WHITE};
+                color: {Colors.TEXT};
                 border: none;
                 border-radius: 12px;
                 font-size: 18px;
@@ -116,7 +101,7 @@ class LoginWindow(QWidget):
 
         self.code_label.setStyleSheet(f"""
             QLabel {{
-                color: {Colors.WHITE};
+                color: {Colors.TEXT};
                 font-size: 22px;
                 font-weight: bold;
             }}
@@ -151,7 +136,6 @@ class LoginWindow(QWidget):
         # -------------------------------------------------
 
         layout.addWidget(self.title)
-        layout.addWidget(self.subtitle)
 
         layout.addStretch()
 
