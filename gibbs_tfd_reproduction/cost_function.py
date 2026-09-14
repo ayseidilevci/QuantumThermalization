@@ -30,8 +30,18 @@ class CostFunction:
 
         return cost_B
     
-    def minimize_cost(self, x0, beta):
-        optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='COBYLA')
+    def minimize_cost(self, x0, beta, method='COBYLA', maxiter=None, callback=None):
+        """Run the classical optimizer. `method` is any scipy.optimize.minimize
+        method that supports a plain `callback(xk)` (COBYLA, Nelder-Mead and
+        Powell are verified to; see frontend/setup.py's OPTIMIZER_METHODS).
+        `callback`, if given, is invoked with the current parameter vector
+        after every iteration — used by the GUI to stream progress live.
+        """
+        options = {'maxiter': maxiter} if maxiter is not None else None
+        optimized_params = minimize(
+            self.cost_function, x0=x0, args=(beta,), method=method,
+            options=options, callback=callback,
+        )
         return optimized_params.x
     
 

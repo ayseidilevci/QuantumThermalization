@@ -1,174 +1,530 @@
-from PySide6.QtCore import Signal, Qt
+"""Run screen. Rebuilt from the original minimal ExperimentWindow (a single
+placeholder QLabel + hardcoded angles) into a real variational run:
+OptimizationWorker drives gibbs_tfd_reproduction's real CostFunction /
+TFDCircuit on a background QThread (mirroring the gui branch's tfd_gui.py
+VariationalWorker QObject/QThread/Signal pattern) so the UI streams the loss
+curve and a live reduced-density-matrix estimate without freezing, then
+submits the optimized circuit to the selected Quantum Inspire backend.
+"""
+
+import csv
+from pathlib import Path
+
+import numpy as np
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+
+from PySide6.QtCore import Qt, QThread, QObject, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QPushButton,
-    QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
+    QPlainTextEdit, QFileDialog, QMessageBox,
 )
 
-from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
-
 from qiskit import transpile
+from qiskit.quantum_info import partial_trace
+
+from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
+from gibbs_tfd_reproduction.cost_function import CostFunction
+
+from frontend.colors import Colors
+from frontend.session import SessionConfig
+from frontend.plots import MplCanvas, style_axes, panel
+
+SIDEBAR_WIDTH = 300
+
+# Logical-qubit order TFDCircuit builds on (see tfd_circuit.py): q0=A2,
+# q1=A1, q2=B2, q3=B1. A role->physical-qubit mapping from the device panel
+# becomes a transpile() initial_layout in this order.
+_LOGICAL_ROLE_ORDER = ("A2", "A1", "B2", "B1")
+
+
+class _Aborted(Exception):
+    """Raised from inside scipy's optimizer callback to unwind minimize()
+    cleanly when the user hits Stop (verified against COBYLA/Nelder-Mead/
+    Powell — see the callback= plumbing added to cost_function.minimize_cost)."""
+
+
+class OptimizationWorker(QObject):
+    """Runs on a background QThread. Emits `progress(iteration, cost)` every
+    optimizer step, `rho_progress(rho)` with the live reduced density matrix
+    of subsystem A (an exact partial trace of the simulated ansatz state,
+    not a placeholder), then `finished(result_dict)` once done.
+    """
+
+    progress = Signal(int, float)
+    rho_progress = Signal(object)
+    finished = Signal(object)
+    log = Signal(str)
+
+    def __init__(self, manager, config: SessionConfig):
+        super().__init__()
+        self.manager = manager
+        self.config = config
+        self._abort = False
+
+    def abort(self):
+        self._abort = True
+
+    def run(self):
+        config = self.config
+        cost_fn = CostFunction(varsigma=1.57)
+        x0 = np.array([config.gamma1, config.gamma2, config.alpha1, config.alpha2])
+        iteration = [0]
+
+        # The live density-matrix preview is by far the most expensive thing
+        # to redraw (a full 3D bar plot + colorbar rebuild, ~20-100ms each),
+        # and it runs on the UI thread since Qt marshals the signal there.
+        # Emitting it on every single callback call made the whole run look
+        # hung: for a typical 100-iteration run this alone accounted for ~90%
+        # of the wall-clock time, all spent redrawing on the main thread
+        # instead of anything the optimizer needed. Cap it to a bounded
+        # number of live previews across the whole run instead — the actual
+        # optimization (this is a local statevector simulation, not a
+        # hardware round-trip) finishes in well under a second regardless of
+        # iteration count.
+        rho_every = max(1, config.iterations // 20)
+
+        def callback(xk):
+            if self._abort:
+                raise _Aborted()
+            iteration[0] += 1
+            cost = cost_fn.cost_function(xk, config.beta)
+            self.progress.emit(iteration[0], float(cost))
+            if iteration[0] % rho_every == 0:
+                try:
+                    circuit = TFDCircuit(*xk)
+                    rho_a = partial_trace(circuit.get_state_vector(), [2, 3]).data
+                    self.rho_progress.emit(rho_a)
+                except Exception:
+                    pass  # a live preview glitch shouldn't kill the optimization
+
+        self.log.emit(
+            f"Starting optimization  |  beta={config.beta}  optimizer={config.optimizer}")
+
+        try:
+            final_params = cost_fn.minimize_cost(
+                x0, config.beta, method=config.optimizer,
+                maxiter=config.iterations, callback=callback,
+            )
+        except _Aborted:
+            self.log.emit("Aborted.")
+            self.finished.emit({"aborted": True})
+            return
+        except Exception as exc:
+            self.log.emit(f"Optimization failed: {exc}")
+            self.finished.emit({"aborted": True, "error": str(exc)})
+            return
+
+        final_circuit = TFDCircuit(*final_params)
+        rho_final = partial_trace(final_circuit.get_state_vector(), [2, 3]).data
+        final_cost = float(cost_fn.cost_function(final_params, config.beta))
+
+        self.log.emit("Optimization complete. Submitting circuit to Quantum Inspire...")
+        submitted = False
+        try:
+            backend = self.manager.get_backend(config.backend_name)
+            initial_layout = [config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
+            transpiled = transpile(
+                final_circuit.as_qiskit_circuit(), backend, initial_layout=initial_layout)
+            job, _results = self.manager.submit_circuit(transpiled, backend)
+            submitted = job is not None
+            self.log.emit("Submitted." if submitted else "Submission returned no job.")
+        except Exception as exc:
+            self.log.emit(f"Submission failed: {exc}")
+
+        self.finished.emit({
+            "aborted": False,
+            "params": final_params,
+            "cost": final_cost,
+            "rho": rho_final,
+            "submitted": submitted,
+        })
+
 
 class ExperimentWindow(QWidget):
 
-    go_home = Signal()
+    back_to_setup = Signal()
 
     def __init__(self, manager):
         super().__init__()
-
         self.manager = manager
+        self.thread = None
+        self.worker = None
+        self.config = None
+        self.loss_x, self.loss_y = [], []
+        self._last_qc = None
+        self._last_rho = None
 
-        self.setWindowTitle("Run Experiment")
-
-        layout = QVBoxLayout(self)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
         # -------------------------------------------------
-        # Top bar
+        # Left sidebar — recap, stop, status log
         # -------------------------------------------------
 
-        top_bar = QHBoxLayout()
+        sidebar = QWidget()
+        sidebar.setFixedWidth(SIDEBAR_WIDTH)
+        sidebar.setStyleSheet(f"background-color: {Colors.BG_2};")
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(20, 28, 20, 20)
+        side.setSpacing(10)
 
-        title = QLabel("Run Experiment")
+        title = QLabel("Run")
+        title_font = QFont()
+        title_font.setPointSize(15)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setStyleSheet(f"color: {Colors.TEXT};")
+        side.addWidget(title)
 
-        self.start_button = QPushButton(
-            "▶  START EXPERIMENT"
-        )
+        self.recap_form = QFormLayout()
+        self.recap_form.setVerticalSpacing(6)
+        self._recap_labels = {}
+        for key in ("Backend", "β", "Optimizer", "Iterations", "γ, α (initial)", "Qubits"):
+            lbl = QLabel("–")
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet(f"color: {Colors.TEXT};")
+            self._recap_labels[key] = lbl
+            self.recap_form.addRow(f"{key}:", lbl)
+        side.addLayout(self.recap_form)
 
-        self.start_button.setFixedSize(200, 50)
+        side.addSpacing(6)
+        self.result_lbl = QLabel("")
+        self.result_lbl.setWordWrap(True)
+        self.result_lbl.setStyleSheet(f"color: {Colors.GOOD}; font-weight: 600;")
+        side.addWidget(self.result_lbl)
 
-        self.start_button.setStyleSheet("""
-            QPushButton {
-                background-color: #87CEEB;
-                color: #06101C;
-                border: none;
-                border-radius: 10px;
-                font-size: 15px;
-                font-weight: bold;
-            }
+        side.addStretch(0)
+        side.addSpacing(6)
 
-            QPushButton:hover {
-                background-color: #A8DDF2;
-            }
-
-            QPushButton:pressed {
-                background-color: #6BBBDD;
-            }
+        self.stop_btn = QPushButton("■  Stop")
+        self.stop_btn.setMinimumHeight(40)
+        self.stop_btn.setCursor(Qt.PointingHandCursor)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.WARN};
+                border: 1px solid {Colors.WARN}; border-radius: 10px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: rgba(254,138,39,0.12); }}
+            QPushButton:disabled {{ color: {Colors.TEXT_MUTED}; border-color: {Colors.BORDER}; }}
         """)
+        self.stop_btn.clicked.connect(self.stop)
+        side.addWidget(self.stop_btn)
 
-        top_bar.addWidget(title)
-        top_bar.addStretch()
-        top_bar.addWidget(self.start_button)
+        status_lbl = QLabel("Status")
+        status_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-weight: 600;")
+        side.addWidget(status_lbl)
 
-        layout.addLayout(top_bar)
-
-        # -------------------------------------------------
-        # Circuit area
-        # -------------------------------------------------
-
-        self.circuit_label = QLabel(
-            "Circuit will appear here"
-        )
-
-        self.circuit_label.setAlignment(
-            Qt.AlignCenter
-        )
-
-        layout.addWidget(self.circuit_label)
-
-        layout.addStretch()
-
-        # -------------------------------------------------
-        # Bottom bar
-        # -------------------------------------------------
-
-        bottom_bar = QHBoxLayout()
-
-        bottom_bar.addStretch()
-
-        self.home_button = QPushButton(
-            "←  GO BACK HOME"
-        )
-
-        self.home_button.setFixedSize(180, 45)
-
-        self.home_button.setStyleSheet("""
-            QPushButton {
-                background-color: #1F2A38;
-                color: #7F8B95;
-                border: none;
-                border-radius: 10px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-
-            QPushButton:hover {
-                background-color: #2A3746;
-                color: #FFFFFF;
-            }
-
-            QPushButton:pressed {
-                background-color: #17212C;
-            }
+        self.status_log = QPlainTextEdit()
+        self.status_log.setReadOnly(True)
+        self.status_log.setMaximumBlockCount(500)
+        self.status_log.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background: {Colors.BG_3}; color: {Colors.TEXT_DIM};
+                border: 1px solid {Colors.BORDER}; border-radius: 8px;
+                font-family: monospace; font-size: 9pt;
+            }}
         """)
+        self.status_log.setFixedHeight(140)
+        side.addWidget(self.status_log)
 
-        bottom_bar.addWidget(self.home_button)
+        back_btn = QPushButton("←  Back to Setup")
+        back_btn.setCursor(Qt.PointingHandCursor)
+        back_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.TEXT_DIM};
+                border: 1px solid {Colors.BORDER}; border-radius: 10px; padding: 8px;
+            }}
+            QPushButton:hover {{ color: {Colors.TEXT}; border-color: {Colors.ACCENT}; }}
+        """)
+        back_btn.clicked.connect(self.back_to_setup.emit)
+        side.addWidget(back_btn)
 
-        layout.addLayout(bottom_bar)
+        root.addWidget(sidebar)
 
         # -------------------------------------------------
-        # Connections
+        # Right main area — loss + density plots, circuit (collapsible)
         # -------------------------------------------------
 
-        self.start_button.clicked.connect(
-            self.start_experiment
-        )
+        main = QWidget()
+        main_layout = QVBoxLayout(main)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(10)
 
-        self.home_button.clicked.connect(
-            self.go_home.emit
-        )
+        plots_row = QHBoxLayout()
+        self.loss_canvas = MplCanvas()
+        self.rho_canvas = MplCanvas(height=4.0, use_layout=False)
+        plots_row.addWidget(panel("Loss minimization (live)", self.loss_canvas,
+                                   on_save=self._save_loss), stretch=1)
+        plots_row.addWidget(panel("Reduced density matrix ρ_A", self.rho_canvas,
+                                   on_save=self._save_density), stretch=1)
+        main_layout.addLayout(plots_row, stretch=1)
 
-    def start_experiment(self):
+        circuit_toggle = QPushButton("▸  Circuit diagram")
+        circuit_toggle.setCheckable(True)
+        circuit_toggle.setCursor(Qt.PointingHandCursor)
+        circuit_toggle.setStyleSheet(f"""
+            QPushButton {{
+                text-align: left; background: {Colors.BG_2}; color: {Colors.TEXT_DIM};
+                border: 1px solid {Colors.BORDER}; border-radius: 8px; padding: 6px 10px;
+            }}
+        """)
+        main_layout.addWidget(circuit_toggle)
 
-        print("\n========================================")
-        print("STARTING EXPERIMENT")
-        print("========================================")
+        self.circ_canvas = MplCanvas(height=2.6)
+        self.circuit_card = panel("Circuit (reference)", self.circ_canvas,
+                                   on_save=self._save_circuit)
+        self.circuit_card.hide()
+        main_layout.addWidget(self.circuit_card)
 
-        gamma1 = 0.5
-        gamma2 = 0.5
-        alpha1 = 0.5
-        alpha2 = 0.5
+        def _toggle_circuit(checked):
+            circuit_toggle.setText(("▾" if checked else "▸") + "  Circuit diagram")
+            self.circuit_card.setVisible(checked)
+        circuit_toggle.toggled.connect(_toggle_circuit)
 
-        print("\nCreating TFD circuit...")
+        root.addWidget(main, stretch=1)
 
-        tfd = TFDCircuit(
-            gamma1=gamma1,
-            gamma2=gamma2,
-            alpha1=alpha1,
-            alpha2=alpha2,
-            qubits=4,
-        )
+        self.init_loss_plot()
+        self._draw_empty_density()
 
-        print("\nTFD circuit created:")
+    # -----------------------------------------------------
+    # Public API (driven by main.py)
+    # -----------------------------------------------------
 
-        backend = self.manager.get_backend()
+    @property
+    def is_running(self) -> bool:
+        return self.thread is not None and self.thread.isRunning()
 
-        print("\nSelected backend:")
-        print(backend)
+    def start_run(self, config: SessionConfig):
+        self.config = config
+        self._update_recap(config)
+        self.result_lbl.setText("")
+        self.status_log.clear()
+        self.init_loss_plot()
+        self._draw_circuit_for(
+            [config.gamma1, config.gamma2, config.alpha1, config.alpha2])
+        self._draw_empty_density()
 
-        job, results = self.manager.submit_circuit(
-            transpile(tfd.as_qiskit_circuit(), backend),
-            backend,
-        )
+        self.thread = QThread()
+        self.worker = OptimizationWorker(self.manager, config)
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self._on_progress)
+        self.worker.rho_progress.connect(self._draw_density)
+        self.worker.log.connect(self._on_log)
+        self.worker.finished.connect(self._on_finished)
+        self.worker.finished.connect(self.thread.quit)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.finished.connect(self._on_thread_finished)
 
-        if job is not None:
-            self.circuit_label.setText(
-                "Experiment submitted successfully."
-            )
+        self.stop_btn.setEnabled(True)
+        self.thread.start()
+
+    def _on_thread_finished(self):
+        # Qt has scheduled the QThread object itself for deletion (see
+        # deleteLater above) — drop our own references too, so is_running
+        # (checked on every Home/Back-to-Setup click) doesn't touch a
+        # since-deleted C++ object and raise instead of just returning False.
+        self.thread = None
+        self.worker = None
+
+    def stop(self):
+        if self.worker is not None:
+            self.worker.abort()
+        self.stop_btn.setEnabled(False)
+
+    # -----------------------------------------------------
+    # Recap / logging
+    # -----------------------------------------------------
+
+    def _update_recap(self, config: SessionConfig):
+        self._recap_labels["Backend"].setText(config.backend_name)
+        self._recap_labels["β"].setText(f"{config.beta:.2f}")
+        self._recap_labels["Optimizer"].setText(config.optimizer)
+        self._recap_labels["Iterations"].setText(str(config.iterations))
+        self._recap_labels["γ, α (initial)"].setText(
+            f"γ₁={config.gamma1:.2f}  γ₂={config.gamma2:.2f}\n"
+            f"α₁={config.alpha1:.2f}  α₂={config.alpha2:.2f}")
+        mapping = config.qubit_mapping or {}
+        self._recap_labels["Qubits"].setText(
+            "  ".join(f"{role}→q{mapping[role]}" for role in ("A1", "A2", "B1", "B2")
+                      if role in mapping) or "–")
+
+    def _on_log(self, message: str):
+        self.status_log.appendPlainText(message)
+
+    def _on_finished(self, result: dict):
+        self.stop_btn.setEnabled(False)
+        if result.get("aborted"):
+            return
+        params = result["params"]
+        self._draw_circuit_for(params)
+        # Always draw the true converged result, regardless of where the
+        # throttled live preview (see OptimizationWorker.run) last landed.
+        self._draw_density(result["rho"])
+        self.result_lbl.setText(
+            f"Converged  |  final cost={result['cost']:.4f}\n"
+            f"γ₁={params[0]:.3f} γ₂={params[1]:.3f} "
+            f"α₁={params[2]:.3f} α₂={params[3]:.3f}\n"
+            + ("Submitted to backend." if result.get("submitted")
+               else "Submission did not complete — see status log."))
+
+    # -----------------------------------------------------
+    # Plotting
+    # -----------------------------------------------------
+
+    def init_loss_plot(self):
+        self.loss_x, self.loss_y = [], []
+        fig = self.loss_canvas.fig
+        fig.clear()
+        ax = fig.add_subplot(111)
+        self._loss_ax = ax
+        (self._loss_line,) = ax.plot([], [], "-", color=Colors.ACCENT, linewidth=2.2,
+                                      solid_capstyle="round")
+        (self._loss_head,) = ax.plot([], [], "o", color=Colors.ACCENT_HOVER,
+                                      markersize=6, markeredgecolor=Colors.BG_3,
+                                      markeredgewidth=1.2)
+        self._loss_fill = None
+        style_axes(ax, title="Loss minimization", xlabel="Iteration", ylabel="Cost  C(β)")
+        self.loss_canvas.draw()
+
+    def _on_progress(self, it: int, cost: float):
+        self.loss_x.append(it)
+        self.loss_y.append(cost)
+        self._loss_line.set_data(self.loss_x, self.loss_y)
+        self._loss_head.set_data([it], [cost])
+        if self._loss_fill is not None:
+            self._loss_fill.remove()
+        self._loss_fill = self._loss_ax.fill_between(
+            self.loss_x, self.loss_y, min(self.loss_y),
+            color=Colors.ACCENT, alpha=0.12, linewidth=0)
+        self._loss_ax.relim()
+        self._loss_ax.autoscale_view()
+        self.loss_canvas.draw_idle()
+
+    def _draw_empty_density(self):
+        self._draw_density(np.eye(4, dtype=complex) / 4)
+
+    def _draw_density(self, rho: np.ndarray):
+        self._last_rho = rho
+        fig = self.rho_canvas.fig
+        fig.clear()
+        fig.subplots_adjust(left=0.02, right=0.82, bottom=0.05, top=0.92)
+        ax = fig.add_subplot(111, projection="3d")
+        ax.set_facecolor(Colors.BG_3)
+        for pane in (ax.xaxis, ax.yaxis, ax.zaxis):
+            pane.set_pane_color((0, 0, 0, 0))
+            pane._axinfo["grid"]["color"] = mcolors.to_rgba(Colors.GRID, 0.6)
+        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+            axis.line.set_color(Colors.GRID)
+            axis.label.set_color(Colors.TEXT_DIM)
+        ax.tick_params(colors=Colors.TEXT_MUTED)
+
+        n = rho.shape[0]
+        xpos, ypos = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
+        xpos = xpos.ravel(); ypos = ypos.ravel()
+        heights = np.abs(rho).ravel()
+        phases = np.angle(rho).ravel()
+        norm_phase = (phases + np.pi) / (2 * np.pi)
+        colors = cm.twilight(norm_phase)
+        ax.bar3d(xpos, ypos, np.zeros_like(heights), 0.7, 0.7, heights,
+                  color=colors, shade=True, edgecolor=Colors.BG_1, linewidth=0.6)
+        labels = ["00", "01", "10", "11"][:n]
+        ax.set_xticks(np.arange(n) + 0.35); ax.set_xticklabels(labels)
+        ax.set_yticks(np.arange(n) + 0.35); ax.set_yticklabels(labels)
+        ax.set_zlabel("|ρ|")
+        ax.set_title("ρ_A  (height = magnitude, colour = phase)",
+                      color=Colors.TEXT, fontsize=11, fontweight="bold", pad=6)
+
+        sm = cm.ScalarMappable(cmap=cm.twilight, norm=mcolors.Normalize(vmin=-np.pi, vmax=np.pi))
+        cbar = fig.colorbar(sm, ax=ax, shrink=0.55, pad=0.15, ticks=[-np.pi, 0, np.pi])
+        cbar.ax.set_yticklabels(["−π", "0", "π"], color=Colors.TEXT_DIM)
+        cbar.set_label("phase", color=Colors.TEXT_DIM, fontsize=9)
+        cbar.outline.set_edgecolor(Colors.BORDER)
+        self.rho_canvas.draw_idle()
+
+    def _draw_circuit_for(self, params):
+        qc = TFDCircuit(*params).as_qiskit_circuit()
+        self._last_qc = qc
+        fig = self.circ_canvas.fig
+        fig.clear()
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(Colors.BG_3)
+        style = {
+            "backgroundcolor": Colors.BG_3,
+            "linecolor": Colors.TEXT_DIM,
+            "textcolor": Colors.TEXT,
+            "gatetextcolor": "#06101C",
+            "subtextcolor": Colors.TEXT_MUTED,
+            "creglinecolor": Colors.TEXT_MUTED,
+            "gatefacecolor": Colors.ACCENT,
+            "barrierfacecolor": Colors.GRID,
+        }
+        try:
+            qc.draw(output="mpl", ax=ax, style=style)
+        except Exception:
+            qc.draw(output="mpl", ax=ax)
+        self.circ_canvas.draw()
+
+    # -----------------------------------------------------
+    # Save actions
+    # -----------------------------------------------------
+
+    def _save_circuit(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save circuit", "circuit.png",
+            "PNG image (*.png);;OpenQASM 2 (*.qasm)")
+        if not path:
+            return
+        if path.lower().endswith(".qasm"):
+            if self._last_qc is None:
+                QMessageBox.warning(self, "Nothing to export", "No circuit drawn yet.")
+                return
+            try:
+                from qiskit import qasm2
+                Path(path).write_text(qasm2.dumps(self._last_qc), encoding="utf-8")
+            except Exception as e:
+                QMessageBox.warning(self, "Export failed", str(e))
         else:
-            self.circuit_label.setText(
-                "Experiment submission failed."
-            )
+            self.circ_canvas.fig.savefig(path, facecolor=self.circ_canvas.fig.get_facecolor())
 
-        print("Experiment ended!")
+    def _save_loss(self):
+        if not self.loss_x:
+            QMessageBox.information(self, "Nothing to save", "Run an optimization first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save loss curve", "loss.csv", "CSV data (*.csv);;PNG image (*.png)")
+        if not path:
+            return
+        if path.lower().endswith(".png"):
+            self.loss_canvas.fig.savefig(path, facecolor=self.loss_canvas.fig.get_facecolor())
+        else:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["iteration", "cost"])
+                w.writerows(zip(self.loss_x, self.loss_y))
+
+    def _save_density(self):
+        if self._last_rho is None:
+            QMessageBox.information(self, "Nothing to save", "No density matrix yet.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save density matrix", "density_matrix.npy",
+            "NumPy array (*.npy);;CSV data (*.csv);;PNG image (*.png)")
+        if not path:
+            return
+        lower = path.lower()
+        if lower.endswith(".png"):
+            self.rho_canvas.fig.savefig(path, facecolor=self.rho_canvas.fig.get_facecolor())
+        elif lower.endswith(".npy"):
+            np.save(path, self._last_rho)
+        else:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["# real part"])
+                w.writerows(self._last_rho.real.tolist())
+                w.writerow(["# imag part"])
+                w.writerows(self._last_rho.imag.tolist())
