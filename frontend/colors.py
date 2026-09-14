@@ -4,8 +4,7 @@ class Colors:
     BG_2 = "#1F2A38"
 
     # Text
-    TEXT = "#7F8B95"
-    WHITE = "#FFFFFF"
+    TEXT = "#FFFFFF"
 
     # Gradients
     GRADIENT_1_START = "#CA0095"
