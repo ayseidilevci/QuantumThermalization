@@ -1,11 +1,13 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QLabel, QHBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QHBoxLayout, QWidget, QPushButton
 
 from frontend.colors import Colors
 
 
 class TopBar(QWidget):
+
+    home_clicked = Signal()
 
     def __init__(self):
         super().__init__()
@@ -26,6 +28,19 @@ class TopBar(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(25, 0, 25, 0)
 
+        self.home_btn = QPushButton("🏠  Home")
+        self.home_btn.setCursor(Qt.PointingHandCursor)
+        self.home_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(255,255,255,0.12); color: {Colors.TEXT};
+                border: none; border-radius: 8px; padding: 6px 14px; font-weight: 600;
+            }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.22); }}
+        """)
+        self.home_btn.clicked.connect(self.home_clicked.emit)
+        self.home_btn.hide()  # hidden on the Login screen
+        layout.addWidget(self.home_btn)
+
         title = QLabel("Quantum Inspire Experiment")
 
         font = QFont()
@@ -40,7 +55,13 @@ class TopBar(QWidget):
             }}
         """)
 
-        layout.addWidget(
-            title,
-            alignment=Qt.AlignCenter
-        )
+        layout.addWidget(title, stretch=1, alignment=Qt.AlignCenter)
+
+        # balances the Home button's width so the title stays visually
+        # centered whether or not the button is shown
+        spacer = QLabel("")
+        spacer.setFixedWidth(90)
+        layout.addWidget(spacer)
+
+    def set_home_visible(self, visible: bool):
+        self.home_btn.setVisible(visible)

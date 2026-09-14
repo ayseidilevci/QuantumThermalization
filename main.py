@@ -1,11 +1,11 @@
 import sys
-import numpy as np
 
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
     QVBoxLayout,
     QStackedWidget,
+    QMessageBox,
 )
 
 from backend.qi_manager import QuantumInspireManager
@@ -14,7 +14,9 @@ from frontend.colors import Colors
 from frontend.topbar import TopBar
 from frontend.login import LoginWindow
 from frontend.home import HomeWindow
+from frontend.setup import SetupWindow
 from frontend.experiment import ExperimentWindow
+
 
 def run():
 
@@ -34,7 +36,7 @@ def run():
     # Main window
     window = QWidget()
 
-    window.resize(1100, 700)
+    window.resize(1200, 800)
 
     layout = QVBoxLayout(window)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -48,33 +50,93 @@ def run():
 
     login = LoginWindow(manager)
     home = HomeWindow(manager)
+    setup = SetupWindow(manager)
     experiment = ExperimentWindow(manager)
 
     stack.addWidget(login)
     stack.addWidget(home)
+    stack.addWidget(setup)
     stack.addWidget(experiment)
 
     layout.addWidget(stack)
 
-    login.login_successful.connect(
-        lambda: stack.setCurrentWidget(home)
-    )
+    # -------------------------------------------------
+    # Navigation
+    # -------------------------------------------------
 
-    # Home -> Experiment
-    home.experiment_requested.connect(
-        lambda: stack.setCurrentWidget(experiment)
-    )
+    def show_login():
+        topbar.set_home_visible(False)
+        stack.setCurrentWidget(login)
 
-    # Experiment -> Home
-    experiment.go_home.connect(
-        lambda: stack.setCurrentWidget(home)
-    )
+    def show_home():
+        topbar.set_home_visible(True)
+        stack.setCurrentWidget(home)
 
+    def show_setup():
+        topbar.set_home_visible(True)
+        stack.setCurrentWidget(setup)
+
+    def show_run():
+        topbar.set_home_visible(True)
+        stack.setCurrentWidget(experiment)
+
+    def confirm_leave_run() -> bool:
+        """If a run is live, ask before navigating away and stop it if
+        confirmed. Returns True once it's safe to navigate."""
+        if not experiment.is_running:
+            return True
+        reply = QMessageBox.question(
+            window,
+            "Stop experiment?",
+            "An experiment is still running. Leaving this screen will stop it.\n"
+            "Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            experiment.stop()
+            return True
+        return False
+
+    def go_home_from_anywhere():
+        if stack.currentWidget() is experiment and not confirm_leave_run():
+            return
+        show_home()
+
+    def go_to_setup_from_run():
+        if not confirm_leave_run():
+            return
+        show_setup()
+
+    def open_setup_from_home(config, show_tutorial):
+        setup.load_config(config)
+        setup.set_tutorial_visible(show_tutorial)
+        show_setup()
+
+    def start_run_from_setup(config):
+        experiment.start_run(config)
+        show_run()
+
+    # Login -> Home
+    login.login_successful.connect(show_home)
+
+    # Home -> Setup (Start / Load / Tutorial all land here)
+    home.open_setup.connect(open_setup_from_home)
+
+    # Setup -> Home / Run
+    setup.go_home.connect(show_home)
+    setup.run_requested.connect(start_run_from_setup)
+
+    # Run -> Setup
+    experiment.back_to_setup.connect(go_to_setup_from_run)
+
+    # Persistent top bar -> Home, from anywhere (guarded while a run is live)
+    topbar.home_clicked.connect(go_home_from_anywhere)
 
     if manager.check_login():
-        stack.setCurrentWidget(home)
+        show_home()
     else:
-        stack.setCurrentWidget(login)
+        show_login()
 
     window.show()
 
@@ -84,49 +146,7 @@ def run():
         screen.center() - window.rect().center()
     )
 
-    # send_circuit(manager=manager)
     sys.exit(app.exec())
-
-
-# def send_circuit(manager):
-#     betas = [0.02, 0.2, 1, 5, 50] 
-#     cost_function = CostFunction(varsigma=1.57)
-#     x0 = np.array([0.0, 0.0, 0.0, 0.0])
-#     results = {0: x0.copy()}
-#
-#     for beta in betas:
-#         angles = cost_function.minimize_cost(x0, beta)
-#         x0 = angles
-#         results[beta] = angles
-#         print(f"beta={beta}: angles={angles}")
-#
-#     gibbs = GibbsState(H_AA)
-#
-#     backend = manager.provider.get_backend("QX emulator")
-#
-#     for beta, angles in results.items():
-#         g1, g2, a1, a2 = angles
-#         qc = TFDCircuit(g1, g2, a1, a2)
-#
-#         sv = qc.get_state_vector()
-#         rho_A = partial_trace(sv, [2, 3])
-#
-#         target = DensityMatrix(gibbs.gibbs_density_matrix(beta))
-#         fid = state_fidelity(rho_A, target)
-#         print(f"beta={beta}: fidelity to true Gibbs state = {fid}")
-#
-#         job = manager.submit(transpile(qc.as_qiskit_circuit(), backend), backend)
-#         job_id = str(job.circuits_run_data[0].job_id)
-#
-#         job_result = job.result()
-#         counts = job_result.data()["counts"]
-#         print(counts)
-#
-#         StoreProjectRecord(job)
-#
-#         loaded_job = RetrieveProjectRecord(job_id)
-#         loaded_results = loaded_job.get_counts()
-#         print(loaded_results)
 
 
 if __name__ == "__main__":
