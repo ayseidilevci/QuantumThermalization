@@ -8,6 +8,8 @@ from typing import Any, Callable
 
 from qiskit_quantuminspire.qi_provider import QIProvider
 
+from test_auth import check_login
+
 
 @dataclass
 class BackendInfo:
@@ -109,14 +111,38 @@ class QuantumInspireManager:
             False -> login is required
         """
 
-        config_path = (
-            Path.home() / ".quantuminspire" / "config.json"
-        )
+        config_path = Path.home() / ".quantuminspire" / "config.json"
 
         if not config_path.exists():
             return False
 
         try:
+            from quantuminspire.settings.user_settings import UserSettings
+            from quantuminspire.utils.authentication import OauthDeviceSession
+
+            # Load the persistent QI configuration
+            settings = UserSettings()
+            auth_settings = settings.default_auth_settings
+
+            # No tokens stored
+            if auth_settings.tokens is None:
+                return False
+
+            # Check the access token.
+            # If it is expired/about to expire, this performs a refresh.
+            session = OauthDeviceSession(auth_settings)
+            token_info = session.refresh()
+
+            # Update the settings with the token returned by refresh().
+            auth_settings.tokens = token_info
+
+            # Persist it to ~/.quantuminspire/config.json
+            settings.save()
+
+            # Store the user ID for our manager
+            self.userID = auth_settings.team_member_id
+
+            # Verify that the authenticated QI API is reachable
             provider = QIProvider()
             provider.backends()
 
@@ -128,6 +154,7 @@ class QuantumInspireManager:
             print(f"QI authentication check failed: {exc}")
 
             self.provider = None
+            self.userID = None
 
             return False
 
