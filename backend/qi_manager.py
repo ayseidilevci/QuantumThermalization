@@ -1,14 +1,10 @@
-import os
-import re
-import subprocess
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+import threading
+import webbrowser
 
 from qiskit_quantuminspire.qi_provider import QIProvider
-
-from test_auth import check_login
 
 
 @dataclass
@@ -36,65 +32,82 @@ class QuantumInspireManager:
         on_complete: Callable[[int], None],
     ):
         """
-        Start the Quantum Inspire CLI login in the background.
+        Start the Quantum Inspire OAuth device login in the background.
 
         on_code(code):
-            called when the QI activation code is detected.
+            Called when the QI verification code is available.
 
         on_complete(return_code):
-            called when the login process finishes.
+            Called when the login process finishes.
+            0 = success
+            non-zero = failure
         """
 
         def worker():
+            try:
+                from quantuminspire.settings.user_settings import UserSettings
+                from quantuminspire.managers.auth_manager import AuthManager
+                from quantuminspire.utils.authentication import OauthDeviceSession
+                from qi2_shared.settings import Url
+                from qi2_shared.utils import run_async
 
-            env = {
-                **os.environ,
-                "PYTHONUNBUFFERED": "1",
-            }
+                host = Url("https://api.quantum-inspire.com")
 
-            process = subprocess.Popen(
-                ["qi", "login"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env,
-            )
+                # Load the persistent QI configuration.
+                settings = UserSettings()
 
-            if process.stdout is not None:
+                # Use the SDK's AuthManager for authentication setup/storage.
+                auth_manager = AuthManager(settings)
 
-                while True:
-                    line = process.stdout.readline()
+                # On a fresh installation, auths[host] does not exist yet.
+                # The SDK normally creates it through _fetch_auth_settings().
+                if host not in settings.auths:
+                    run_async(auth_manager._fetch_auth_settings(host))
 
-                    if line == "":
-                        break
+                auth_settings = settings.auths[host]
 
-                    line = line.strip()
+                # Start OAuth device authorization.
+                auth_session = OauthDeviceSession(auth_settings)
 
-                    code_match = re.search(
-                        r"user_code=([A-Z0-9-]+)",
-                        line,
-                    )
+                login_info = auth_session.initialize_authorization()
 
-                    if code_match:
-                        self.login_code = code_match.group(1)
+                # Get information for the GUI/browser.
+                login_code = login_info["user_code"]
+                login_url = login_info["verification_uri_complete"]
 
-                        if on_code is not None:
-                            on_code(self.login_code)
+                self.login_code = login_code
 
-                    user_id_match = re.search(
-                        r"member ID (\d+)",
-                        line,
-                    )
+                if on_code is not None:
+                    on_code(login_code)
 
-                    if user_id_match:
-                        self.userID = int(
-                            user_id_match.group(1)
-                        )
+                # Open the browser exactly as the QI CLI does.
+                webbrowser.open(login_url, new=2)
 
-            return_code = process.wait()
+                # Wait for the user to finish authentication.
+                tokens = auth_session.poll_for_tokens()
 
-            if on_complete is not None:
-                on_complete(return_code)
+                # Use the SDK's existing token storage mechanism.
+                # This also retrieves and stores the team member ID.
+                auth_manager._store_tokens(host, tokens)
+
+                # Keep the manager state in sync.
+                self.userID = settings.auths[host].team_member_id
+
+                # Create the authenticated provider.
+                self.provider = QIProvider()
+                self.provider.backends()
+
+                if on_complete is not None:
+                    on_complete(0)
+
+            except Exception as exc:
+                print(f"QI login failed: {exc}")
+
+                self.provider = None
+                self.userID = None
+
+                if on_complete is not None:
+                    on_complete(1)
 
         threading.Thread(
             target=worker,
@@ -118,31 +131,26 @@ class QuantumInspireManager:
 
         try:
             from quantuminspire.settings.user_settings import UserSettings
-            from quantuminspire.utils.authentication import OauthDeviceSession
+            from quantuminspire.managers.auth_manager import AuthManager
+            from qi2_shared.settings import Url
 
-            # Load the persistent QI configuration
+            host = Url("https://api.quantum-inspire.com")
+
             settings = UserSettings()
-            auth_settings = settings.default_auth_settings
 
-            # No tokens stored
-            if auth_settings.tokens is None:
+            # Authentication configuration does not exist.
+            if host not in settings.auths:
                 return False
 
-            # Check the access token.
-            # If it is expired/about to expire, this performs a refresh.
-            session = OauthDeviceSession(auth_settings)
-            token_info = session.refresh()
+            auth_manager = AuthManager(settings)
 
-            # Update the settings with the token returned by refresh().
-            auth_settings.tokens = token_info
+            # This checks the stored access token and refreshes it
+            # when necessary.
+            auth_manager.refresh_tokens(host)
 
-            # Persist it to ~/.quantuminspire/config.json
-            settings.save()
+            self.userID = settings.auths[host].team_member_id
 
-            # Store the user ID for our manager
-            self.userID = auth_settings.team_member_id
-
-            # Verify that the authenticated QI API is reachable
+            # Verify that the API provider can be created.
             provider = QIProvider()
             provider.backends()
 
