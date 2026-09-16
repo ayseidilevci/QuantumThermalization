@@ -226,10 +226,11 @@ class ExperimentWindow(QWidget):
             job, results = self.manager.submit_circuit(
                 circuit,
                 backend,
-            )
+            ) 
 
             if job is not None:
                 self.experiment_finished.emit(True)
+                self.manager.save_job(job)
             else:
                 self.experiment_finished.emit(False)
 
