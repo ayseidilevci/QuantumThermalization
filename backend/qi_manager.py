@@ -174,32 +174,11 @@ class QuantumInspireManager:
         self.backends = []
 
         for backend in self.provider.backends():
-
-            backend_string = str(backend)
-
-            name_match = re.search(
-                r"name=([^,]+)",
-                backend_string,
-            )
-
-            id_match = re.search(
-                r"id=(\d+)",
-                backend_string,
-            )
-
-            if name_match is None or id_match is None:
-                continue
-
-            name = name_match.group(1).strip()
-            backend_id = int(id_match.group(1))
-
-            status = backend.status
-
             backend_info = BackendInfo(
                 backend=backend,
-                name=name,
-                id=backend_id,
-                status=status,
+                name=backend.name,
+                id=backend.id,
+                status=backend.status,
             )
 
             self.backends.append(backend_info)
@@ -253,10 +232,10 @@ class QuantumInspireManager:
 
         if name is None:
             name = self.STANDARD_BACKEND
-        #
-        # if self.provider is None:
-        #     self.set_provider()
-        
+
+        if self.provider is None:
+            self.set_provider()        
+
         self.provider = QIProvider()
 
         return self.provider.get_backend(name)

@@ -219,3 +219,4 @@ __marimo__/
 
 #testing
 test*.py
+tests
