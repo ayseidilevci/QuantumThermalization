@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from backend.qi_manager import QuantumInspireManager
 
-from frontend.colors import Colors
+from frontend.colors import Colors, Fonts
 from frontend.topbar import TopBar
 from frontend.login import LoginWindow
 from frontend.home import HomeWindow
@@ -27,6 +27,7 @@ def run():
         QWidget {{
             background-color: {Colors.BG_1};
             color: {Colors.TEXT};
+            font-family: {Fonts.FAMILY};
         }}
     """)
 

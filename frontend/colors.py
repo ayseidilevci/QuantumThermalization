@@ -29,3 +29,11 @@ class Colors:
 
     GRADIENT_2_START = "#F03282"
     GRADIENT_2_END = "#FE8A27"
+
+
+class Fonts:
+    # QSS font-family fallback list (same syntax as CSS) — tried in order
+    # against what's actually installed. Applied app-wide via main.py's
+    # global QWidget stylesheet; per-widget QFont() calls elsewhere only
+    # set size/bold, so this family choice cascades to them too.
+    FAMILY = 'Roboto, Inter, "Helvetica Neue", "Arial Nova", Arial, sans-serif'
