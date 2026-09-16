@@ -17,6 +17,28 @@ class BackendInfo:
     status: Any
 
 
+# The live API reports a finer-grained status (see
+# compute_api_client.BackendStatus: OFFLINE, IDLE, EXECUTING, CALIBRATING,
+# BENCHMARKING) than the GUI needs. Collapse it to the three states the
+# backend-selection cards actually color: green/online, yellow/busy,
+# red/offline. Matched on status.value rather than importing the enum
+# itself, so this file doesn't have to track compute_api_client's exact
+# member set.
+STATE_ONLINE = "online"
+STATE_BUSY = "busy"
+STATE_OFFLINE = "offline"
+
+
+def classify_backend_status(status: Any) -> str:
+    """Classify a live QI backend status into online / busy / offline."""
+    value = str(getattr(status, "value", status)).lower()
+    if value == "offline":
+        return STATE_OFFLINE
+    if value == "idle":
+        return STATE_ONLINE
+    return STATE_BUSY  # executing / calibrating / benchmarking
+
+
 class QuantumInspireManager:
 
     def __init__(self):
@@ -191,6 +213,18 @@ class QuantumInspireManager:
 
     def update_provider(self):
         self.provider = QIProvider()
+
+    def backend_availability(self) -> dict[str, str]:
+        """Map backend name -> "online"/"busy"/"offline" for every backend
+        set_provider() last found. Call set_provider() first to refresh
+        self.backends; this just classifies what's already there so the
+        backend-selection cards can re-color without another network round
+        trip for every repaint.
+        """
+        return {
+            info.name: classify_backend_status(info.status)
+            for info in self.backends
+        }
 
     def submit_circuit(self, circuit, backend):
         """

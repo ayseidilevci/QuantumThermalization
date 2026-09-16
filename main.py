@@ -14,6 +14,7 @@ from frontend.colors import Colors, Fonts
 from frontend.topbar import TopBar
 from frontend.login import LoginWindow
 from frontend.home import HomeWindow
+from frontend.backend_select import BackendSelectWindow
 from frontend.setup import SetupWindow
 from frontend.experiment import ExperimentWindow
 
@@ -51,13 +52,20 @@ def run():
 
     login = LoginWindow(manager)
     home = HomeWindow(manager)
+    backend_select = BackendSelectWindow(manager)
     setup = SetupWindow(manager)
     experiment = ExperimentWindow(manager)
 
     stack.addWidget(login)
     stack.addWidget(home)
+    stack.addWidget(backend_select)
     stack.addWidget(setup)
     stack.addWidget(experiment)
+
+    # Set by open_setup_from_home() while a Start/Tutorial click waits on
+    # BackendSelectWindow's card pick — Load already carries a backend_name
+    # and skips that screen, so this only matters for the other two paths.
+    pending_tutorial = [False]
 
     layout.addWidget(stack)
 
@@ -72,6 +80,10 @@ def run():
     def show_home():
         topbar.set_home_visible(True)
         stack.setCurrentWidget(home)
+
+    def show_backend_select():
+        topbar.set_home_visible(True)
+        stack.setCurrentWidget(backend_select)
 
     def show_setup():
         topbar.set_home_visible(True)
@@ -110,8 +122,22 @@ def run():
         show_setup()
 
     def open_setup_from_home(config, show_tutorial):
-        setup.load_config(config)
-        setup.set_tutorial_visible(show_tutorial)
+        if config is not None:
+            # Load: the saved session already names a backend, so skip
+            # straight past card selection.
+            setup.set_backend(config.backend_name)
+            setup.load_config(config)
+            setup.set_tutorial_visible(show_tutorial)
+            show_setup()
+            return
+        # Start / Tutorial: pick a backend first.
+        pending_tutorial[0] = show_tutorial
+        show_backend_select()
+
+    def start_setup_from_backend_select(name, qi_backend):
+        setup.set_backend(name, qi_backend)
+        setup.load_config(None)
+        setup.set_tutorial_visible(pending_tutorial[0])
         show_setup()
 
     def start_run_from_setup(config):
@@ -121,11 +147,14 @@ def run():
     # Login -> Home
     login.login_successful.connect(show_home)
 
-    # Home -> Setup (Start / Load / Tutorial all land here)
+    # Home -> Backend Select (Start / Tutorial) or straight to Setup (Load)
     home.open_setup.connect(open_setup_from_home)
 
-    # Setup -> Home / Run
-    setup.go_home.connect(show_home)
+    # Backend Select -> Setup
+    backend_select.backend_chosen.connect(start_setup_from_backend_select)
+
+    # Setup -> Backend Select / Run
+    setup.change_backend.connect(show_backend_select)
     setup.run_requested.connect(start_run_from_setup)
 
     # Run -> Setup

@@ -41,16 +41,16 @@ def _field_style():
 class SetupWindow(QWidget):
 
     run_requested = Signal(object)   # SessionConfig
-    go_home = Signal()
+
+    # Backend is chosen on the prior screen (frontend/backend_select.py);
+    # emitted when the user wants to change it without starting over.
+    change_backend = Signal()
 
     def __init__(self, manager):
         super().__init__()
         self.manager = manager
 
-        self._backend_infos = {}     # name -> BackendInfo
-        self._backends_loaded = False
-        self._pending_backend_name = None
-        self._pending_qubit_mapping = None
+        self._backend_name = None
         self._qubit_mapping = {}
 
         root = QHBoxLayout(self)
@@ -80,13 +80,21 @@ class SetupWindow(QWidget):
         form = QFormLayout()
         form.setVerticalSpacing(10)
 
-        self.backend = QComboBox()
-        self.backend.addItem(self.manager.STANDARD_BACKEND)
-        self.backend.currentTextChanged.connect(self._on_backend_changed)
-
-        self.backend_status_lbl = QLabel("")
-        self.backend_status_lbl.setWordWrap(True)
-        self.backend_status_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 8.5pt;")
+        backend_row = QHBoxLayout()
+        self._backend_name_lbl = QLabel(self.manager.STANDARD_BACKEND)
+        self._backend_name_lbl.setStyleSheet(f"color: {Colors.TEXT}; font-weight: 600;")
+        change_backend_btn = QPushButton("change")
+        change_backend_btn.setCursor(Qt.PointingHandCursor)
+        change_backend_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.ACCENT}; border: none;
+                text-decoration: underline; font-size: 9pt;
+            }}
+            QPushButton:hover {{ color: {Colors.ACCENT_HOVER}; }}
+        """)
+        change_backend_btn.clicked.connect(self.change_backend.emit)
+        backend_row.addWidget(self._backend_name_lbl, stretch=1)
+        backend_row.addWidget(change_backend_btn)
 
         self.beta = QDoubleSpinBox()
         self.beta.setRange(0.01, 50.0)
@@ -101,8 +109,7 @@ class SetupWindow(QWidget):
         self.iterations.setRange(5, 2000)
         self.iterations.setValue(100)
 
-        form.addRow("Backend:", self.backend)
-        form.addRow(self.backend_status_lbl)
+        form.addRow("Backend:", backend_row)
         form.addRow("Inverse temperature β:", self.beta)
         form.addRow("Optimizer:", self.optimizer)
         form.addRow("Iterations:", self.iterations)
@@ -131,18 +138,8 @@ class SetupWindow(QWidget):
 
         side.addStretch()
 
-        home_btn = QPushButton("←  Home")
-        home_btn.setCursor(Qt.PointingHandCursor)
-        home_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {Colors.TEXT_DIM};
-                border: 1px solid {Colors.BORDER}; border-radius: 10px;
-                padding: 8px;
-            }}
-            QPushButton:hover {{ color: {Colors.TEXT}; border-color: {Colors.ACCENT}; }}
-        """)
-        home_btn.clicked.connect(self.go_home.emit)
-        side.addWidget(home_btn)
+        # No separate "Home" button here — the persistent top bar already
+        # has one, visible on this screen.
 
         self.start_experiment_btn = QPushButton("▶  Start Experiment")
         self.start_experiment_btn.setMinimumHeight(46)
@@ -188,8 +185,9 @@ class SetupWindow(QWidget):
 
         self.tutorial = TutorialCoach(self, steps=[
             TutorialStep(
-                self.backend, "Backend",
-                "Which Quantum Inspire device (or the QX emulator) runs the circuit."),
+                self._backend_name_lbl, "Backend",
+                "The device or simulator you picked on the previous screen. Use "
+                "“change” to go back and pick a different one."),
             TutorialStep(
                 self.beta, "Inverse temperature β",
                 "The target inverse temperature of the Gibbs state you're preparing."),
@@ -226,64 +224,24 @@ class SetupWindow(QWidget):
     # Lifecycle
     # -----------------------------------------------------
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        if not self._backends_loaded:
-            self._load_backends()
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.tutorial.reposition()
-
-    def _load_backends(self):
-        self._backends_loaded = True
-        try:
-            self.manager.set_provider()
-            infos = self.manager.backends
-            self.backend_status_lbl.setText("")
-        except Exception as exc:
-            infos = []
-            self.backend_status_lbl.setText(
-                f"Couldn't fetch the live backend list ({exc}); "
-                f"defaulting to {self.manager.STANDARD_BACKEND}.")
-
-        self._backend_infos = {info.name: info for info in infos}
-        names = list(self._backend_infos.keys()) or [self.manager.STANDARD_BACKEND]
-
-        self.backend.blockSignals(True)
-        self.backend.clear()
-        self.backend.addItems(names)
-        self.backend.blockSignals(False)
-
-        self._apply_pending_backend()
-
-    def _apply_pending_backend(self):
-        name = self._pending_backend_name
-        mapping = self._pending_qubit_mapping
-        self._pending_backend_name = None
-        self._pending_qubit_mapping = None
-
-        if name:
-            idx = self.backend.findText(name)
-            if idx >= 0 and idx != self.backend.currentIndex():
-                self.backend.setCurrentIndex(idx)
-                # setCurrentIndex already triggered _on_backend_changed via
-                # currentTextChanged; fall through to also restore qubits.
-            else:
-                self._on_backend_changed(self.backend.currentText())
-        else:
-            self._on_backend_changed(self.backend.currentText())
-
-        if mapping:
-            self.device_panel.set_assignment(mapping)
 
     # -----------------------------------------------------
     # Backend / device panel wiring
     # -----------------------------------------------------
 
-    def _on_backend_changed(self, name: str):
-        info = self._backend_infos.get(name)
-        qi_backend = info.backend if info else None
+    def set_backend(self, name: str, qi_backend=None):
+        """Called by main.py's navigation once a backend is picked on the
+        previous screen (frontend/backend_select.py) — or when restoring a
+        saved session, with qi_backend=None since that skips re-fetching
+        the live object. Redraws the device panel's topology for it, which
+        clears any qubit assignment; call before load_config() so a
+        restored qubit_mapping isn't wiped out afterwards.
+        """
+        self._backend_name = name
+        self._backend_name_lbl.setText(name)
         self.device_panel.set_backend(name, qi_backend)
 
     def _on_mapping_changed(self, mapping: dict):
@@ -306,13 +264,11 @@ class SetupWindow(QWidget):
         self.alpha1.setValue(config.alpha1)
         self.alpha2.setValue(config.alpha2)
 
-        self._pending_backend_name = config.backend_name
-        self._pending_qubit_mapping = config.qubit_mapping
-
-        if self._backends_loaded:
-            self._apply_pending_backend()
-        # else: showEvent -> _load_backends() will apply it once the
-        # backend list (and therefore the device panel's topology) exists.
+        # Assumes set_backend() (for this config's backend_name) already
+        # ran — see that method's docstring — so the device panel's
+        # topology matches this qubit_mapping before it's restored.
+        if config.qubit_mapping:
+            self.device_panel.set_assignment(config.qubit_mapping)
 
     def set_tutorial_visible(self, visible: bool):
         if visible:
@@ -322,7 +278,7 @@ class SetupWindow(QWidget):
 
     def current_config(self) -> SessionConfig:
         return SessionConfig(
-            backend_name=self.backend.currentText(),
+            backend_name=self._backend_name or self.manager.STANDARD_BACKEND,
             beta=self.beta.value(),
             optimizer=self.optimizer.currentText(),
             iterations=self.iterations.value(),

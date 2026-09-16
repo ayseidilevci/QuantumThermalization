@@ -62,6 +62,13 @@ BACKEND_IMAGES = {
     "tuna17": DATA_DIR / "1772648307-tuna-17_schematic-svg.svg",
 }
 
+# Simulator backends (e.g. "Ry emulator", "QX emulator") have no physical
+# chip, so no schematic exists to ship yet. Empty for now — the
+# backend-selection cards (frontend/backend_select.py) fall back to a
+# placeholder for any name with no entry here. Add entries the same fuzzy
+# way as BACKEND_IMAGES once artwork exists; no code change needed.
+SIMULATOR_IMAGES: dict[str, Path] = {}
+
 # Hardcoded, real per-chip topology: on-screen coordinates (matching each
 # schematic in Appdata/Img/, y increasing downward same as the images) and
 # real connectivity (which pairs are actually coupled — the "TC" tunable
