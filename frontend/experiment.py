@@ -22,10 +22,11 @@ from PySide6.QtWidgets import (
 )
 
 from qiskit import transpile
-from qiskit.quantum_info import partial_trace
+from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity
 
 from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
 from gibbs_tfd_reproduction.cost_function import CostFunction
+from gibbs_tfd_reproduction.ground_truth import GibbsState, default_subsystem_hamiltonian
 
 from frontend.colors import Colors
 from frontend.session import SessionConfig
@@ -120,6 +121,18 @@ class OptimizationWorker(QObject):
         rho_final = partial_trace(final_circuit.get_state_vector(), [2, 3]).data
         final_cost = float(cost_fn.cost_function(final_params, config.beta))
 
+        # How good the prepared state actually is, not just how low the
+        # (engineered, proxy) cost got: fidelity against the true Gibbs
+        # state ρ ∝ exp(-βH) — the same ground-truth check
+        # gibbs_tfd_reproduction/experiment.py runs after optimizing.
+        try:
+            gibbs = GibbsState(default_subsystem_hamiltonian())
+            target = DensityMatrix(gibbs.gibbs_density_matrix(config.beta))
+            fidelity = float(state_fidelity(DensityMatrix(rho_final), target))
+        except Exception as exc:
+            self.log.emit(f"Couldn't compute fidelity to the true Gibbs state: {exc}")
+            fidelity = None
+
         self.log.emit("Optimization complete. Submitting circuit to Quantum Inspire...")
         submitted = False
         try:
@@ -143,6 +156,7 @@ class OptimizationWorker(QObject):
             "params": final_params,
             "cost": final_cost,
             "rho": rho_final,
+            "fidelity": fidelity,
             "submitted": submitted,
         })
 
@@ -370,10 +384,15 @@ class ExperimentWindow(QWidget):
         # Always draw the true converged result, regardless of where the
         # throttled live preview (see OptimizationWorker.run) last landed.
         self._draw_density(result["rho"])
+        fidelity = result.get("fidelity")
+        fidelity_line = (
+            f"Fidelity to true Gibbs state: {fidelity:.4f}\n" if fidelity is not None
+            else "")
         self.result_lbl.setText(
             f"Converged  |  final cost={result['cost']:.4f}\n"
             f"γ₁={params[0]:.3f} γ₂={params[1]:.3f} "
             f"α₁={params[2]:.3f} α₂={params[3]:.3f}\n"
+            + fidelity_line
             + ("Submitted to backend." if result.get("submitted")
                else "Submission did not complete — see status log."))
 

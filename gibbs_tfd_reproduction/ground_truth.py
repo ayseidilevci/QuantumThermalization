@@ -6,6 +6,22 @@
 
 import numpy as np
 
+_X = np.array([[0, 1], [1, 0]])
+_Z = np.array([[1, 0], [0, -1]])
+_I = np.array([[1, 0], [0, 1]])
+
+
+def default_subsystem_hamiltonian():
+    """H_A = Z⊗Z + X⊗I + I⊗X, the 2-qubit (per-side) reference Hamiltonian
+    experiment.py's reproduction script checks fidelity against — factored
+    out here so the GUI can run that same ground-truth check (see
+    frontend/experiment.py). Pre-diagonalized as (eigenvalues,
+    eigenvectors), the form GibbsState/TFDState both expect.
+    """
+    H = np.kron(_Z, _Z) + np.kron(_X, _I) + np.kron(_I, _X)
+    return np.linalg.eigh(H)
+
+
 class GibbsState:
     def __init__(self, H):
         self.H = H

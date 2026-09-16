@@ -1,18 +1,11 @@
 from qiskit.quantum_info import Statevector, DensityMatrix, partial_trace, state_fidelity
 import numpy as np
 
-from ground_truth import GibbsState, TFDState 
+from ground_truth import GibbsState, TFDState, default_subsystem_hamiltonian
 from tfd_circuit import TFDCircuit
 from cost_function import CostFunction
 
-X = [[0, 1], [1, 0]]
-Z = [[1, 0], [0, -1]]
-I = [[1, 0], [0, 1]]
-ZZ_A = np.kron(Z, Z)
-XI_A = np.kron(X, I)
-IX_A = np.kron(I, X)
-H = ZZ_A + XI_A + IX_A
-H_AA = np.linalg.eigh(H)
+H_AA = default_subsystem_hamiltonian()
 
 betas = [0.02, 0.2, 1, 5, 50] 
 
