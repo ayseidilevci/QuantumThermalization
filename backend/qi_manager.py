@@ -6,6 +6,8 @@ import webbrowser
 
 from qiskit_quantuminspire.qi_provider import QIProvider
 
+from qi_utilities.utility_functions.data_handling import StoreProjectRecord, RetrieveProjectRecord
+
 
 @dataclass
 class BackendInfo:
@@ -24,7 +26,7 @@ class QuantumInspireManager:
         self.userID = None
         self.login_code = None
 
-        self.STANDARD_BACKEND = "QX emulator"
+        self.STANDARD_BACKEND = "Ry emulator"
 
     def login(
         self,
@@ -239,3 +241,9 @@ class QuantumInspireManager:
         self.provider = QIProvider()
 
         return self.provider.get_backend(name)
+
+    def get_job_id(self, job):
+        return job.circuits_run_data[0].job_id
+
+    def save_job(self, job):
+        StoreProjectRecord(job)
