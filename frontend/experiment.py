@@ -460,8 +460,11 @@ class ExperimentWindow(QWidget):
         ax.set_xticks(np.arange(n) + 0.35); ax.set_xticklabels(labels)
         ax.set_yticks(np.arange(n) + 0.35); ax.set_yticklabels(labels)
         ax.set_zlabel("|ρ|")
-        ax.set_title("ρ_A  (height = magnitude, colour = phase)",
-                      color=Colors.TEXT, fontsize=11, fontweight="bold", pad=6)
+        # No in-plot title: the panel() card above already headers this
+        # "Reduced density matrix ρ_A", and a 3D-axes title here doesn't
+        # respect the panel's width (it overflows past the canvas edges
+        # once the panel gets narrow) — the z-axis/colorbar labels below
+        # already say height=|ρ|, colour=phase without that risk.
 
         sm = cm.ScalarMappable(cmap=cm.twilight, norm=mcolors.Normalize(vmin=-np.pi, vmax=np.pi))
         cbar = fig.colorbar(sm, ax=ax, shrink=0.55, pad=0.15, ticks=[-np.pi, 0, np.pi])
