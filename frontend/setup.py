@@ -66,7 +66,7 @@ class SetupWindow(QWidget):
         sidebar.setStyleSheet(f"background-color: {Colors.BG_2};")
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(20, 28, 20, 24)
-        side.setSpacing(10)
+        side.setSpacing(16)
 
         title = QLabel("Setup")
         title_font = QFont()
@@ -75,26 +75,12 @@ class SetupWindow(QWidget):
         title.setFont(title_font)
         title.setStyleSheet(f"color: {Colors.TEXT};")
         side.addWidget(title)
-        side.addSpacing(6)
 
-        form = QFormLayout()
-        form.setVerticalSpacing(10)
-
-        backend_row = QHBoxLayout()
         self._backend_name_lbl = QLabel(self.manager.STANDARD_BACKEND)
         self._backend_name_lbl.setStyleSheet(f"color: {Colors.TEXT}; font-weight: 600;")
-        change_backend_btn = QPushButton("change")
-        change_backend_btn.setCursor(Qt.PointingHandCursor)
-        change_backend_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {Colors.ACCENT}; border: none;
-                text-decoration: underline; font-size: 9pt;
-            }}
-            QPushButton:hover {{ color: {Colors.ACCENT_HOVER}; }}
-        """)
-        change_backend_btn.clicked.connect(self.change_backend.emit)
-        backend_row.addWidget(self._backend_name_lbl, stretch=1)
-        backend_row.addWidget(change_backend_btn)
+
+        form = QFormLayout()
+        form.setVerticalSpacing(16)
 
         self.beta = QDoubleSpinBox()
         self.beta.setRange(0.01, 50.0)
@@ -109,13 +95,12 @@ class SetupWindow(QWidget):
         self.iterations.setRange(5, 2000)
         self.iterations.setValue(100)
 
-        form.addRow("Backend:", backend_row)
+        form.addRow("Backend:", self._backend_name_lbl)
         form.addRow("Inverse temperature β:", self.beta)
         form.addRow("Optimizer:", self.optimizer)
         form.addRow("Iterations:", self.iterations)
         side.addLayout(form)
 
-        side.addSpacing(4)
         angles_lbl = QLabel("Optimizer starting guess (γ, α)")
         angles_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-weight: 600;")
         side.addWidget(angles_lbl)
@@ -123,7 +108,7 @@ class SetupWindow(QWidget):
         self.angles_group = QWidget()
         angle_form = QFormLayout(self.angles_group)
         angle_form.setContentsMargins(0, 0, 0, 0)
-        angle_form.setVerticalSpacing(8)
+        angle_form.setVerticalSpacing(12)
         self.gamma1 = self._angle_spinbox()
         self.gamma2 = self._angle_spinbox()
         self.alpha1 = self._angle_spinbox()
@@ -159,6 +144,19 @@ class SetupWindow(QWidget):
         self.start_experiment_btn.clicked.connect(self._on_start_experiment)
         side.addWidget(self.start_experiment_btn)
 
+        self.change_backend_btn = QPushButton("⇄  Change backend")
+        self.change_backend_btn.setCursor(Qt.PointingHandCursor)
+        self.change_backend_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.TEXT_DIM};
+                border: 1px solid {Colors.BORDER}; border-radius: 10px;
+                padding: 8px;
+            }}
+            QPushButton:hover {{ color: {Colors.TEXT}; border-color: {Colors.ACCENT}; }}
+        """)
+        self.change_backend_btn.clicked.connect(self.change_backend.emit)
+        side.addWidget(self.change_backend_btn)
+
         root.addWidget(sidebar)
 
         # -------------------------------------------------
@@ -189,7 +187,8 @@ class SetupWindow(QWidget):
             TutorialStep(
                 self._backend_name_lbl, "Backend",
                 "The device or simulator you picked on the previous screen. Use "
-                "“change” to go back and pick a different one."),
+                "the “Change backend” button below to go back and pick a "
+                "different one."),
             TutorialStep(
                 self.beta, "Inverse temperature β",
                 "The target inverse temperature of the Gibbs state you're preparing."),
@@ -212,6 +211,10 @@ class SetupWindow(QWidget):
             TutorialStep(
                 self.start_experiment_btn, "Start Experiment",
                 "Once your qubit assignment is valid, click here to run."),
+            TutorialStep(
+                self.change_backend_btn, "Change backend",
+                "Not the right device or simulator? Go back and pick a "
+                "different one without losing these settings."),
         ])
 
     def _angle_spinbox(self) -> QDoubleSpinBox:
