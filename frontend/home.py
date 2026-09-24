@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
 )
 
 from frontend.colors import Colors
-from frontend.upload import load_session_dialog
 
 SIDEBAR_WIDTH = 280
 
@@ -19,6 +18,7 @@ class HomeWindow(QWidget):
 
     # (SessionConfig or None for defaults, show_tutorial)
     open_setup = Signal(object, bool)
+    open_upload = Signal()
 
     def __init__(self, manager):
         super().__init__()
@@ -146,6 +146,4 @@ class HomeWindow(QWidget):
         self.open_setup.emit(None, True)
 
     def _on_load(self):
-        config = load_session_dialog(self)
-        if config is not None:
-            self.open_setup.emit(config, False)
+        self.open_upload.emit()

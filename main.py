@@ -14,6 +14,7 @@ from frontend.colors import Colors, Fonts
 from frontend.topbar import TopBar
 from frontend.login import LoginWindow
 from frontend.home import HomeWindow
+from frontend.upload_browser import UploadBrowserWindow
 from frontend.backend_select import BackendSelectWindow
 from frontend.setup import SetupWindow
 from frontend.experiment import ExperimentWindow
@@ -52,12 +53,14 @@ def run():
 
     login = LoginWindow(manager)
     home = HomeWindow(manager)
+    upload_browser = UploadBrowserWindow()
     backend_select = BackendSelectWindow(manager)
     setup = SetupWindow(manager)
     experiment = ExperimentWindow(manager)
 
     stack.addWidget(login)
     stack.addWidget(home)
+    stack.addWidget(upload_browser)
     stack.addWidget(backend_select)
     stack.addWidget(setup)
     stack.addWidget(experiment)
@@ -80,6 +83,10 @@ def run():
     def show_home():
         topbar.set_home_visible(True)
         stack.setCurrentWidget(home)
+
+    def show_upload():
+        topbar.set_home_visible(True)
+        stack.setCurrentWidget(upload_browser)
 
     def show_backend_select():
         topbar.set_home_visible(True)
@@ -121,14 +128,18 @@ def run():
             return
         show_setup()
 
+    def load_config_into_setup(config):
+        # A saved session already names a backend, so this skips straight
+        # past card selection — used by both Home's Load and the upload
+        # browser's history/search picks.
+        setup.set_backend(config.backend_name)
+        setup.load_config(config)
+        setup.set_tutorial_visible(False)
+        show_setup()
+
     def open_setup_from_home(config, show_tutorial):
         if config is not None:
-            # Load: the saved session already names a backend, so skip
-            # straight past card selection.
-            setup.set_backend(config.backend_name)
-            setup.load_config(config)
-            setup.set_tutorial_visible(show_tutorial)
-            show_setup()
+            load_config_into_setup(config)
             return
         # Start / Tutorial: pick a backend first.
         pending_tutorial[0] = show_tutorial
@@ -149,6 +160,10 @@ def run():
 
     # Home -> Backend Select (Start / Tutorial) or straight to Setup (Load)
     home.open_setup.connect(open_setup_from_home)
+    home.open_upload.connect(show_upload)
+
+    # Upload browser -> Setup
+    upload_browser.session_loaded.connect(load_config_into_setup)
 
     # Backend Select -> Setup
     backend_select.backend_chosen.connect(start_setup_from_backend_select)

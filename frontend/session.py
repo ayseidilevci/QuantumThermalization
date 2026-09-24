@@ -1,14 +1,99 @@
 """Experiment configuration shared across Home -> Setup -> Run.
 
 Also defines the on-disk JSON schema used by Home's "Load" action (see
-frontend/upload.py) so the two stay in lockstep. Bump SESSION_SCHEMA_VERSION
-and branch on it in from_json_dict if the shape below ever changes.
+frontend/upload_browser.py) so the two stay in lockstep. Bump
+SESSION_SCHEMA_VERSION and branch on it in from_json_dict if the shape
+below ever changes.
 """
 
+import json
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 SESSION_SCHEMA_VERSION = 1
+
+# Small local history of session files opened/saved from this app (see
+# record_recent_session / list_recent_sessions, used by
+# frontend/upload_browser.py's "previously used projects" list). Separate
+# from qi_utilities' own job-record storage — this is just a most-recently-
+# used list of *parameter* files, not submitted-job history.
+_RECENTS_PATH = Path.home() / ".quantuminspire" / "gui_recent_sessions.json"
+_MAX_RECENTS = 15
+
+
+def _read_recents_raw() -> list:
+    if not _RECENTS_PATH.exists():
+        return []
+    try:
+        with _RECENTS_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _write_recents_raw(entries: list) -> None:
+    try:
+        _RECENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _RECENTS_PATH.open("w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2)
+    except OSError:
+        pass  # a failed write here shouldn't block loading/saving a session
+
+
+def list_recent_sessions() -> list:
+    """Most-recent-first list of {"path": str, "used_at": iso-str} entries.
+    Entries whose file has since been deleted/moved are silently dropped
+    (and the pruned list re-saved) rather than shown as dead links.
+    """
+    entries = _read_recents_raw()
+    alive = [e for e in entries if isinstance(e, dict) and "path" in e
+             and Path(e["path"]).exists()]
+    if len(alive) != len(entries):
+        _write_recents_raw(alive)
+    return alive
+
+
+def record_recent_session(path) -> None:
+    """Move `path` to the front of the recents list, creating the entry if
+    it's new. Called on both a successful load and a save."""
+    path_str = str(Path(path).resolve())
+    entries = [e for e in _read_recents_raw() if e.get("path") != path_str]
+    entries.insert(0, {
+        "path": path_str,
+        "used_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    _write_recents_raw(entries[:_MAX_RECENTS])
+
+
+# Remembers the folder frontend/upload_browser.py's search bar last looked
+# in, so picking one sticks across app restarts instead of always starting
+# back at the home directory.
+_PREFS_PATH = Path.home() / ".quantuminspire" / "gui_prefs.json"
+
+
+def get_search_root() -> Optional[Path]:
+    """The last folder chosen for the upload browser's search, or None if
+    none has been chosen yet (caller should default to the home directory)."""
+    try:
+        with _PREFS_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        root = data.get("search_root")
+        return Path(root) if root and Path(root).is_dir() else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def set_search_root(path) -> None:
+    try:
+        _PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _PREFS_PATH.open("w", encoding="utf-8") as f:
+            json.dump({"search_root": str(Path(path).resolve())}, f, indent=2)
+    except OSError:
+        pass
+
 
 # The four ansatz roles a physical qubit can be assigned to — see
 # gibbs_tfd_reproduction/tfd_circuit.py for the logical-qubit convention
