@@ -8,6 +8,7 @@ submits the optimized circuit to the selected Quantum Inspire backend.
 """
 
 import csv
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +31,7 @@ from gibbs_tfd_reproduction.ground_truth import GibbsState, default_subsystem_ha
 
 from frontend.colors import Colors
 from frontend.session import SessionConfig
+from frontend.upload import save_session_dialog
 from frontend.plots import MplCanvas, style_axes, panel
 
 SIDEBAR_WIDTH = 300
@@ -174,6 +176,7 @@ class ExperimentWindow(QWidget):
         self.loss_x, self.loss_y = [], []
         self._last_qc = None
         self._last_rho = None
+        self._last_params = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -214,6 +217,21 @@ class ExperimentWindow(QWidget):
         self.result_lbl.setWordWrap(True)
         self.result_lbl.setStyleSheet(f"color: {Colors.GOOD}; font-weight: 600;")
         side.addWidget(self.result_lbl)
+
+        self.save_session_btn = QPushButton("💾  Save session")
+        self.save_session_btn.setCursor(Qt.PointingHandCursor)
+        self.save_session_btn.setEnabled(False)
+        self.save_session_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.TEXT_DIM};
+                border: 1px solid {Colors.BORDER}; border-radius: 10px;
+                padding: 8px;
+            }}
+            QPushButton:hover {{ color: {Colors.TEXT}; border-color: {Colors.ACCENT}; }}
+            QPushButton:disabled {{ color: {Colors.TEXT_MUTED}; border-color: {Colors.BORDER}; }}
+        """)
+        self.save_session_btn.clicked.connect(self._on_save_session)
+        side.addWidget(self.save_session_btn)
 
         side.addStretch(0)
         side.addSpacing(6)
@@ -319,6 +337,8 @@ class ExperimentWindow(QWidget):
 
     def start_run(self, config: SessionConfig):
         self.config = config
+        self._last_params = None
+        self.save_session_btn.setEnabled(False)
         self._update_recap(config)
         self.result_lbl.setText("")
         self.status_log.clear()
@@ -380,6 +400,8 @@ class ExperimentWindow(QWidget):
         if result.get("aborted"):
             return
         params = result["params"]
+        self._last_params = params
+        self.save_session_btn.setEnabled(True)
         self._draw_circuit_for(params)
         # Always draw the true converged result, regardless of where the
         # throttled live preview (see OptimizationWorker.run) last landed.
@@ -499,6 +521,20 @@ class ExperimentWindow(QWidget):
     # -----------------------------------------------------
     # Save actions
     # -----------------------------------------------------
+
+    def _on_save_session(self):
+        if self.config is None:
+            return
+        # Save the *converged* angles, not the starting guess this run
+        # began from — reloading this session should resume from the
+        # result, not repeat the optimization from scratch.
+        params = self._last_params
+        config = replace(
+            self.config,
+            gamma1=float(params[0]), gamma2=float(params[1]),
+            alpha1=float(params[2]), alpha2=float(params[3]),
+        ) if params is not None else self.config
+        save_session_dialog(self, config)
 
     def _save_circuit(self):
         path, _ = QFileDialog.getSaveFileName(

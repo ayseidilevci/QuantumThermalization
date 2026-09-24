@@ -139,7 +139,9 @@ class SetupWindow(QWidget):
         side.addStretch()
 
         # No separate "Home" button here — the persistent top bar already
-        # has one, visible on this screen.
+        # has one, visible on this screen. Saving a session lives on the
+        # Run screen instead, next to the converged result — see
+        # frontend/experiment.py.
 
         self.start_experiment_btn = QPushButton("▶  Start Experiment")
         self.start_experiment_btn.setMinimumHeight(46)
