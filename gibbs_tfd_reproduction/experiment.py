@@ -1,13 +1,17 @@
-from qiskit.quantum_info import Statevector, DensityMatrix, partial_trace, state_fidelity
 import numpy as np
+from qiskit.quantum_info import Statevector, DensityMatrix, partial_trace, state_fidelity
+from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.pyplot as plt
 
 from ground_truth import GibbsState, TFDState, default_subsystem_hamiltonian
 from tfd_circuit import TFDCircuit
 from cost_function import CostFunction
+from tomography import run_tomography, reconstruct_density_matrix, plot_density_matrix
+from qi_utilities.device_simulation.simulators import NoisySimulator
 
 H_AA = default_subsystem_hamiltonian()
 
-betas = [0.02, 0.2, 1, 5, 50] 
+betas = [0.01, 1, 5] 
 
 for beta in betas:
     gibbs = GibbsState(H_AA)
@@ -24,15 +28,45 @@ for beta in betas:
     print("TFD state:", tfd_traceout)
 
 
-cost_function = CostFunction(varsigma=1.57)
-x0 = np.array([0.0, 0.0, 0.0, 0.0])
+backend = NoisySimulator("Starmon-7", ideal_simulation=False)
+initial_layout = [0, 2, 3, 5]
+cost_function = CostFunction(varsigma=1.57, backend=backend)
+x0 = np.array([0.1, 0.1, 0.1, 0.1])
 results = {0: x0.copy()}
 
 for beta in betas:
+    cost_function.cost_history = []
+    cost_function.circuit_pdf = PdfPages(f"plots/circuits_beta{beta}.pdf")
+
+    cost_function.circuit_pdf = PdfPages(f"plots/circuits_beta{beta}.pdf")
     angles = cost_function.minimize_cost(x0, beta)
+    cost_function.circuit_pdf.close()
+
     x0 = angles
     results[beta] = angles
     print(f"beta={beta}: angles={angles}")
+
+    fig, ax = plt.subplots()
+    ax.plot(cost_function.cost_history, marker='o')
+    ax.set_xlabel("Function evaluation")
+    ax.set_ylabel("Cost C(beta)")
+    ax.set_title(f"Cost convergence, beta={beta}")
+    fig.savefig(f"plots/cost_beta{beta}.png", dpi=120)
+    plt.close(fig)
+
+    g1, g2, a1, a2 = angles
+    corrected_probs_A, settings_A = run_tomography(backend, initial_layout, g1, g2, a1, a2, subsystem_qubits=(0, 1), shots=8192)
+    rho_A = reconstruct_density_matrix(corrected_probs_A, settings_A, subsystem_qubits=(0, 1))
+    plot_density_matrix(rho_A, title=f"System A, beta={beta}", save_path=f"plots/tomography_beta{beta}_A.png")
+
+    corrected_probs_B, settings_B = run_tomography(backend, initial_layout, g1, g2, a1, a2, subsystem_qubits=(2, 3), shots=8192)
+    rho_B = reconstruct_density_matrix(corrected_probs_B, settings_B, subsystem_qubits=(2, 3))
+    plot_density_matrix(rho_B, title=f"System B, beta={beta}", save_path=f"plots/tomography_beta{beta}_B.png")
+    
+    print("rho_A:\n", np.round(rho_A, 4))
+    print("rho_B:\n", np.round(rho_B, 4))
+    print("max abs difference:", np.max(np.abs(rho_A - rho_B)))
+    
 
 for beta, angles in results.items():
     g1, g2, a1, a2 = angles

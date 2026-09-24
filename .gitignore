@@ -221,3 +221,5 @@ __marimo__/
 #testing
 test*.py
 tests
+
+.DS_Store

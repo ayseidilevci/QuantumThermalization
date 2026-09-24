@@ -7,3 +7,4 @@ qiskit-quantuminspire
 quantuminspire
 qi-utilities
 PySide6
+pylatexenc
