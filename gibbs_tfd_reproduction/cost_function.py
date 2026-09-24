@@ -71,15 +71,15 @@ class CostFunction:
         probs = get_multi_probs(counts)
         x_probs, z_probs, calib0, calib1 = probs[0], probs[1], counts[2], counts[3]
 
-        if self.iteration % 10 == 0 or self.ro_matrices is None:
-            self.ro_matrices = self._extract_ro_matrices(calib0, calib1)
-        self.iteration += 1
+        # if self.iteration % 10 == 0 or self.ro_matrices is None:
+        #     self.ro_matrices = self._extract_ro_matrices(calib0, calib1)
+        # self.iteration += 1
 
-        # M_q = [[prepared0read0, prepared0read1],
-        #       [preapred1read0, prepared1prepared1]]
-        # kronecker product --> invert the matrix --> apply to raw measurement probability
-        x_probs = apply_readout_assignment_correction(x_probs, self.ro_matrices, [0, 1, 2, 3])
-        z_probs = apply_readout_assignment_correction(z_probs, self.ro_matrices, [0, 1, 2, 3])
+        # # M_q = [[prepared0read0, prepared0read1],
+        # #       [preapred1read0, prepared1prepared1]]
+        # # kronecker product --> invert the matrix --> apply to raw measurement probability
+        # x_probs = apply_readout_assignment_correction(x_probs, self.ro_matrices, [0, 1, 2, 3])
+        # z_probs = apply_readout_assignment_correction(z_probs, self.ro_matrices, [0, 1, 2, 3])
 
         exp_X_A = observable_expectation_values_Z_basis([x_probs], "IIZI")[0] + observable_expectation_values_Z_basis([x_probs], "IIIZ")[0]
         exp_X_B = observable_expectation_values_Z_basis([x_probs], "ZIII")[0] + observable_expectation_values_Z_basis([x_probs], "IZII")[0]
@@ -106,8 +106,8 @@ class CostFunction:
     #         options=options, callback=callback,
     #     )
     def minimize_cost(self, x0, beta):
-        # optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='COBYLA', options={'maxiter': 30, 'rhobeg': 0.5})
-        optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='BFGS', options={'maxiter': 30, 'eps': 0.1})
+        optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='COBYLA', options={'maxiter': 100, 'rhobeg': 0.5})
+        # optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='BFGS', options={'maxiter': 100, 'eps': 0.1})
         return optimized_params.x
     
     def _extract_ro_matrices(self, counts_prep0, counts_prep1):

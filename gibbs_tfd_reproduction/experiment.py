@@ -11,7 +11,7 @@ from qi_utilities.device_simulation.simulators import NoisySimulator
 
 H_AA = default_subsystem_hamiltonian()
 
-betas = [0.01, 1, 5] 
+betas = [0.00000001, 1, 5] 
 
 for beta in betas:
     gibbs = GibbsState(H_AA)
@@ -28,7 +28,7 @@ for beta in betas:
     print("TFD state:", tfd_traceout)
 
 
-backend = NoisySimulator("Starmon-7", ideal_simulation=False)
+backend = NoisySimulator("Starmon-7", ideal_simulation=True)
 initial_layout = [0, 2, 3, 5]
 cost_function = CostFunction(varsigma=1.57, backend=backend)
 x0 = np.array([0.1, 0.1, 0.1, 0.1])
@@ -42,8 +42,8 @@ for beta in betas:
     angles = cost_function.minimize_cost(x0, beta)
     cost_function.circuit_pdf.close()
 
-    x0 = angles
     results[beta] = angles
+    x0 = angles
     print(f"beta={beta}: angles={angles}")
 
     fig, ax = plt.subplots()
