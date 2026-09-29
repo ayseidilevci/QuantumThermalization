@@ -46,11 +46,15 @@ for beta in betas:
     x0 = angles
     print(f"beta={beta}: angles={angles}")
 
+    lower_bound = -2 - 2*cost_function.varsigma - 2*beta**(-cost_function.varsigma)
+
     fig, ax = plt.subplots()
-    ax.plot(cost_function.cost_history, marker='o')
+    ax.plot(cost_function.cost_history, marker='o', label="Cost C(beta)")
+    ax.axhline(lower_bound, color='red', linestyle='--', label=f"theoretical lower bound = {lower_bound:.2f}")
     ax.set_xlabel("Function evaluation")
     ax.set_ylabel("Cost C(beta)")
     ax.set_title(f"Cost convergence, beta={beta}")
+    ax.legend()
     fig.savefig(f"plots/cost_beta{beta}.png", dpi=120)
     plt.close(fig)
 
