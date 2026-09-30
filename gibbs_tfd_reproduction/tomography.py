@@ -12,7 +12,7 @@ from qi_utilities.error_mitigation.toolkit.readout_error_mitigation import (
     apply_readout_assignment_correction,
 )
 
-from tfd_circuit import TFDCircuit
+from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
 
 N_QUBITS = 4
 PAULIS = ["X", "Y", "Z"]

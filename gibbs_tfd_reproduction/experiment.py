@@ -1,8 +1,9 @@
 import numpy as np
-from qiskit.quantum_info import Statevector, DensityMatrix, partial_trace, state_fidelity
+from qiskit.quantum_info import SparsePauliOp, Statevector, DensityMatrix, partial_trace, state_fidelity
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 
+from matplotlib.ticker import MaxNLocator
 from ground_truth import GibbsState, TFDState, default_subsystem_hamiltonian
 from tfd_circuit import TFDCircuit
 from cost_function import CostFunction
@@ -11,7 +12,26 @@ from qi_utilities.device_simulation.simulators import NoisySimulator
 
 H_AA = default_subsystem_hamiltonian()
 
-betas = [0.00000001, 1, 5] 
+betas = [0.01, 0.1, 0.25, 0.5, 1, 2, 3, 4, 5]
+
+def naive_lower_bound(beta, varsigma=1.57):
+    w = beta ** (-varsigma)
+    # <X_A> = <X_B> = -2   (each is a sum of two single-qubit X terms)
+    # <ZZ_A> = <ZZ_B> = -1
+    # <XX_BA> = <ZZ_BA> = +2   (each is a sum of two terms)
+    return (-2) + (-2) + varsigma * (-1 + -1) - w * (2 + 2)
+
+def cost_lower_bound(beta, varsigma=1.57):
+    w = beta ** (-varsigma)
+    terms = (
+        [("X", [q], 1.0) for q in range(4)]                      # X_A + X_B
+        + [("ZZ", [0, 1], varsigma), ("ZZ", [2, 3], varsigma)]   # ZZ_A, ZZ_B
+        + [("XX", [0, 2], -w), ("XX", [1, 3], -w)]               # XX_BA
+        + [("ZZ", [0, 2], -w), ("ZZ", [1, 3], -w)]               # ZZ_BA
+    )
+    op = SparsePauliOp.from_sparse_list(terms, num_qubits=4)
+    return np.linalg.eigvalsh(op.to_matrix())[0]
+
 
 for beta in betas:
     gibbs = GibbsState(H_AA)
@@ -23,9 +43,6 @@ for beta in betas:
 
     tfd_traceout = partial_trace(sv_tfd, [2, 3])
     fidelity = state_fidelity(DensityMatrix(gibbs_state), tfd_traceout)
-    print(f"beta={beta}: fidelity = {fidelity}")
-    print("Gibbs state:", gibbs_state)
-    print("TFD state:", tfd_traceout)
 
 
 backend = NoisySimulator("Starmon-7", ideal_simulation=True)
@@ -46,11 +63,18 @@ for beta in betas:
     x0 = angles
     print(f"beta={beta}: angles={angles}")
 
+    c_min = cost_lower_bound(beta, varsigma=1.57)
+    c_naive = naive_lower_bound(beta, varsigma=1.57)
+
     fig, ax = plt.subplots()
-    ax.plot(cost_function.cost_history, marker='o')
+    ax.plot(range(1, len(cost_function.cost_history) + 1), cost_function.cost_history, marker='o', label="Optimizer")
+    ax.axhline(c_min, color='r', ls='--', label=f"Exact lower bound (eigenvalue) = {c_min:.3f}")
+    #ax.axhline(c_naive, color='k', ls=':', label=f"Naive bound (each term at its extreme) = {c_naive:.3f}")
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_xlabel("Function evaluation")
     ax.set_ylabel("Cost C(beta)")
     ax.set_title(f"Cost convergence, beta={beta}")
+    ax.legend()
     fig.savefig(f"plots/cost_beta{beta}.png", dpi=120)
     plt.close(fig)
 
@@ -61,12 +85,7 @@ for beta in betas:
 
     corrected_probs_B, settings_B = run_tomography(backend, initial_layout, g1, g2, a1, a2, subsystem_qubits=(2, 3), shots=8192)
     rho_B = reconstruct_density_matrix(corrected_probs_B, settings_B, subsystem_qubits=(2, 3))
-    plot_density_matrix(rho_B, title=f"System B, beta={beta}", save_path=f"plots/tomography_beta{beta}_B.png")
-    
-    print("rho_A:\n", np.round(rho_A, 4))
-    print("rho_B:\n", np.round(rho_B, 4))
-    print("max abs difference:", np.max(np.abs(rho_A - rho_B)))
-    
+    plot_density_matrix(rho_B, title=f"System B, beta={beta}", save_path=f"plots/tomography_beta{beta}_B.png")    
 
 for beta, angles in results.items():
     g1, g2, a1, a2 = angles

@@ -9,7 +9,7 @@ from scipy.optimize import minimize
 import numpy as np
 import matplotlib.pyplot as plt
 
-from tfd_circuit import TFDCircuit
+from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
 
 # q0 = A2
 # q1 = A1
@@ -24,6 +24,7 @@ class CostFunction:
         self.ro_matrices = None
         self.iteration = 0
         self.cost_history = []
+        self.circuit_pdf = None
 
     def cost_function(self, params, beta):
         gamma1, gamma2, alpha1, alpha2 = params
@@ -88,11 +89,38 @@ class CostFunction:
         exp_XX_BA = observable_expectation_values_Z_basis([x_probs], "ZIZI")[0] + observable_expectation_values_Z_basis([x_probs], "IZIZ")[0]
         exp_ZZ_BA = observable_expectation_values_Z_basis([z_probs], "ZIZI")[0] + observable_expectation_values_Z_basis([z_probs], "IZIZ")[0]
 
-        cost_B = exp_X_A + exp_X_B + self.varsigma * (exp_ZZ_A + exp_ZZ_B) - beta**(-self.varsigma) * (exp_XX_BA + exp_ZZ_BA)
+        # Intermediate terms for granular debugging
+        term_ZZ_sum = exp_ZZ_A + exp_ZZ_B
+        term_scaled_ZZ = self.varsigma * term_ZZ_sum
+        
+        term_BA_sum = exp_XX_BA + exp_ZZ_BA
+        term_power_beta = np.power(beta, -self.varsigma)
+        term_scaled_BA = term_power_beta * term_BA_sum
+
+        # Final calculation
+        cost_B = exp_X_A + exp_X_B + term_scaled_ZZ - term_scaled_BA
+            
+        # # Detailed printouts for every value and term
+        # print("--- Cost B Evaluation Debug ---")
+        # print(f"exp_X_A       : {exp_X_A}")
+        # print(f"exp_X_B       : {exp_X_B}")
+        # print(f"exp_ZZ_A      : {exp_ZZ_A}")
+        # print(f"exp_ZZ_B      : {exp_ZZ_B}")
+        # print(f"exp_XX_BA     : {exp_XX_BA}")
+        # print(f"exp_ZZ_BA     : {exp_ZZ_BA}")
+        # print(f"self.varsigma : {self.varsigma}")
+        # print(f"beta          : {beta}")
+        # print(f"beta^(-varsig): {term_power_beta}")
+        # print("-------------------------------")
+        # print(f"Summation Term 1 (X_A + X_B)           : {exp_X_A + exp_X_B}")
+        # print(f"Summation Term 2 (varsigma * ZZ_sum)   : {term_scaled_ZZ}")
+        # print(f"Summation Term 3 (beta^-. * BA_sum)    : {term_scaled_BA}")
+        # print(f"Calculated cost_B                      : {cost_B}")
+        # print("-------------------------------")
 
         self.cost_history.append(cost_B)
-        return cost_B
-    
+        return cost_B    
+
     # def minimize_cost(self, x0, beta, method='COBYLA', maxiter=None, callback=None):
     #     """Run the classical optimizer. `method` is any scipy.optimize.minimize
     #     method that supports a plain `callback(xk)` (COBYLA, Nelder-Mead and
@@ -105,8 +133,12 @@ class CostFunction:
     #         self.cost_function, x0=x0, args=(beta,), method=method,
     #         options=options, callback=callback,
     #     )
-    def minimize_cost(self, x0, beta):
-        optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='COBYLA', options={'maxiter': 100, 'rhobeg': 0.5})
+    def minimize_cost(self, x0, beta, rhobeg=0.5, maxiter=200, callback=None):
+        optimized_params = minimize(
+            self.cost_function, x0=x0, args=(beta,), method='COBYLA',
+            options={'maxiter': maxiter, 'rhobeg': rhobeg, 'tol': 0.02},
+            callback=callback
+        )
         # optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='BFGS', options={'maxiter': 100, 'eps': 0.1})
         return optimized_params.x
     

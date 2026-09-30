@@ -28,6 +28,7 @@ from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity
 from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
 from gibbs_tfd_reproduction.cost_function import CostFunction
 from gibbs_tfd_reproduction.ground_truth import GibbsState, default_subsystem_hamiltonian
+from gibbs_tfd_reproduction.tomography import run_tomography, reconstruct_density_matrix
 
 from frontend.colors import Colors
 from frontend.session import SessionConfig
@@ -71,97 +72,206 @@ class OptimizationWorker(QObject):
 
     def run(self):
         config = self.config
-        cost_fn = CostFunction(varsigma=1.57)
-        x0 = np.array([config.gamma1, config.gamma2, config.alpha1, config.alpha2])
-        iteration = [0]
-
-        # The live density-matrix preview is by far the most expensive thing
-        # to redraw (a full 3D bar plot + colorbar rebuild, ~20-100ms each),
-        # and it runs on the UI thread since Qt marshals the signal there.
-        # Emitting it on every single callback call made the whole run look
-        # hung: for a typical 100-iteration run this alone accounted for ~90%
-        # of the wall-clock time, all spent redrawing on the main thread
-        # instead of anything the optimizer needed. Cap it to a bounded
-        # number of live previews across the whole run instead — the actual
-        # optimization (this is a local statevector simulation, not a
-        # hardware round-trip) finishes in well under a second regardless of
-        # iteration count.
-        rho_every = max(1, config.iterations // 20)
-
-        def callback(xk):
-            if self._abort:
-                raise _Aborted()
-            iteration[0] += 1
-            cost = cost_fn.cost_function(xk, config.beta)
-            self.progress.emit(iteration[0], float(cost))
-            if iteration[0] % rho_every == 0:
-                try:
-                    circuit = TFDCircuit(*xk)
-                    rho_a = partial_trace(circuit.get_state_vector(), [2, 3]).data
-                    self.rho_progress.emit(rho_a)
-                except Exception:
-                    pass  # a live preview glitch shouldn't kill the optimization
-
-        self.log.emit(
-            f"Starting optimization  |  beta={config.beta}  optimizer={config.optimizer}")
 
         try:
-            final_params = cost_fn.minimize_cost(
-                x0, config.beta, method=config.optimizer,
-                maxiter=config.iterations, callback=callback,
+            # -------------------------------------------------
+            # Backend
+            # -------------------------------------------------
+
+            self.log.emit(
+                f"Connecting to backend: {config.backend_name}"
             )
+
+            backend = self.manager.get_backend(
+                config.backend_name
+            )
+
+            initial_layout = [
+                config.qubit_mapping[role]
+                for role in _LOGICAL_ROLE_ORDER
+            ]
+
+            # -------------------------------------------------
+            # Cost function
+            # -------------------------------------------------
+
+            cost_fn = CostFunction(
+                varsigma=1.57,
+                backend=backend,
+                initial_layout=initial_layout,
+            )
+
+            x0 = np.array([
+                config.gamma1,
+                config.gamma2,
+                config.alpha1,
+                config.alpha2,
+            ])
+
+            iteration = 0
+
+            # -------------------------------------------------
+            # Live optimization callback
+            # -------------------------------------------------
+
+            def callback(xk):
+
+                nonlocal iteration
+
+                if self._abort:
+                    raise _Aborted()
+
+                iteration += 1
+
+                if not cost_fn.cost_history:
+                    return
+
+                cost = float(
+                    cost_fn.cost_history[-1]
+                )
+
+                # Update live cost graph
+                self.progress.emit(
+                    iteration,
+                    cost,
+                )
+
+                self.log.emit(
+                    f"Iteration {iteration}: cost={cost:.6f}"
+                )
+
+                # -------------------------------------------------
+                # Periodic live tomography
+                # -------------------------------------------------
+
+                tomography_every = max(
+                    5,
+                    config.iterations // 20,
+                )
+
+                if (
+                    iteration % tomography_every == 0
+                    or iteration == 1
+                ):
+                    try:
+                        self.log.emit(
+                            f"Running tomography at iteration "
+                            f"{iteration}..."
+                        )
+
+                        corrected_probs, settings = run_tomography(
+                            backend=backend,
+                            initial_layout=initial_layout,
+                            gamma1=float(xk[0]),
+                            gamma2=float(xk[1]),
+                            alpha1=float(xk[2]),
+                            alpha2=float(xk[3]),
+                            subsystem_qubits=(0, 1),
+                            shots=8192,
+                        )
+
+                        rho_a = reconstruct_density_matrix(
+                            corrected_probs,
+                            settings,
+                            subsystem_qubits=(0, 1),
+                        )
+
+                        self.rho_progress.emit(
+                            rho_a
+                        )
+
+                        self.log.emit(
+                            f"Tomography updated at "
+                            f"iteration {iteration}."
+                        )
+
+                    except Exception as exc:
+                        self.log.emit(
+                            f"Tomography failed: {exc}"
+                        )
+
+            # -------------------------------------------------
+            # Optimization
+            # -------------------------------------------------
+
+            self.log.emit(
+                f"Starting optimization | "
+                f"beta={config.beta} | "
+                f"optimizer={config.optimizer}"
+            )
+
+            final_params = cost_fn.minimize_cost(
+                x0=x0,
+                beta=config.beta,
+                maxiter=config.iterations,
+                callback=callback,
+            )
+
+            # -------------------------------------------------
+            # Final result
+            # -------------------------------------------------
+
+            final_cost = float(
+                cost_fn.cost_history[-1]
+            )
+
+            self.log.emit(
+                "Optimization complete."
+            )
+
+            # -------------------------------------------------
+            # Final tomography
+            # -------------------------------------------------
+
+            self.log.emit(
+                "Running final tomography..."
+            )
+
+            corrected_probs, settings = run_tomography(
+                backend=backend,
+                initial_layout=initial_layout,
+                gamma1=float(final_params[0]),
+                gamma2=float(final_params[1]),
+                alpha1=float(final_params[2]),
+                alpha2=float(final_params[3]),
+                subsystem_qubits=(0, 1),
+                shots=16384,
+            )
+
+            rho_final = reconstruct_density_matrix(
+                corrected_probs,
+                settings,
+                subsystem_qubits=(0, 1),
+            )
+
+            self.rho_progress.emit(
+                rho_final
+            )
+
+            self.finished.emit({
+                "aborted": False,
+                "params": final_params,
+                "cost": final_cost,
+                "rho": rho_final,
+                "submitted": False,
+            })
+
         except _Aborted:
             self.log.emit("Aborted.")
-            self.finished.emit({"aborted": True})
-            return
+
+            self.finished.emit({
+                "aborted": True,
+            })
+
         except Exception as exc:
-            self.log.emit(f"Optimization failed: {exc}")
-            self.finished.emit({"aborted": True, "error": str(exc)})
-            return
+            self.log.emit(
+                f"Optimization failed: {exc}"
+            )
 
-        final_circuit = TFDCircuit(*final_params)
-        rho_final = partial_trace(final_circuit.get_state_vector(), [2, 3]).data
-        final_cost = float(cost_fn.cost_function(final_params, config.beta))
-
-        # How good the prepared state actually is, not just how low the
-        # (engineered, proxy) cost got: fidelity against the true Gibbs
-        # state ρ ∝ exp(-βH) — the same ground-truth check
-        # gibbs_tfd_reproduction/experiment.py runs after optimizing.
-        try:
-            gibbs = GibbsState(default_subsystem_hamiltonian())
-            target = DensityMatrix(gibbs.gibbs_density_matrix(config.beta))
-            fidelity = float(state_fidelity(DensityMatrix(rho_final), target))
-        except Exception as exc:
-            self.log.emit(f"Couldn't compute fidelity to the true Gibbs state: {exc}")
-            fidelity = None
-
-        self.log.emit("Optimization complete. Submitting circuit to Quantum Inspire...")
-        submitted = False
-        try:
-            backend = self.manager.get_backend(config.backend_name)
-            initial_layout = [config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
-            transpiled = transpile(
-                final_circuit.as_qiskit_circuit(), backend, initial_layout=initial_layout)
-            job, _results = self.manager.submit_circuit(transpiled, backend)
-            submitted = job is not None
-            if submitted:
-                try:
-                    self.manager.save_job(job)
-                except Exception as exc:
-                    self.log.emit(f"Job ran but couldn't be saved locally: {exc}")
-            self.log.emit("Submitted." if submitted else "Submission returned no job.")
-        except Exception as exc:
-            self.log.emit(f"Submission failed: {exc}")
-
-        self.finished.emit({
-            "aborted": False,
-            "params": final_params,
-            "cost": final_cost,
-            "rho": rho_final,
-            "fidelity": fidelity,
-            "submitted": submitted,
-        })
-
+            self.finished.emit({
+                "aborted": True,
+                "error": str(exc),
+            })
 
 class ExperimentWindow(QWidget):
 
