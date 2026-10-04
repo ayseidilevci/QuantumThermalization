@@ -1,10 +1,20 @@
 """Run screen. Rebuilt from the original minimal ExperimentWindow (a single
 placeholder QLabel + hardcoded angles) into a real variational run:
-OptimizationWorker drives gibbs_tfd_reproduction's real CostFunction /
-TFDCircuit on a background QThread (mirroring the gui branch's tfd_gui.py
-VariationalWorker QObject/QThread/Signal pattern) so the UI streams the loss
-curve and a live reduced-density-matrix estimate without freezing, then
-submits the optimized circuit to the selected Quantum Inspire backend.
+OptimizationWorker drives an exact, noiseless cost evaluation (statevector
+simulation via TFDCircuit — the same formula as
+gibbs_tfd_reproduction/verify_exact_cost.py) on a background QThread
+(mirroring the gui branch's tfd_gui.py VariationalWorker QObject/QThread/
+Signal pattern) so the UI streams the loss curve and a live
+reduced-density-matrix estimate without freezing, then submits the
+optimized circuit to the selected Quantum Inspire backend.
+
+Deliberately NOT gibbs_tfd_reproduction.cost_function.CostFunction: that
+module was rewritten to build a real measurement circuit and run it on a
+backend (NoisySimulator), with no callback support and no configurable
+method/maxiter — each cost evaluation now takes seconds, and scipy can't
+stream intermediate steps to it at all. Fine for the reproduction
+pipeline's own scripts; wrong tool for an interactive GUI that needs to
+stream dozens of steps smoothly in under a second.
 """
 
 import csv
@@ -22,11 +32,12 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QFileDialog, QMessageBox,
 )
 
+from scipy.optimize import minimize
+
 from qiskit import transpile
-from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity
+from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity, Pauli
 
 from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
-from gibbs_tfd_reproduction.cost_function import CostFunction
 from gibbs_tfd_reproduction.ground_truth import GibbsState, default_subsystem_hamiltonian
 
 from frontend.colors import Colors
@@ -42,10 +53,30 @@ SIDEBAR_WIDTH = 300
 _LOGICAL_ROLE_ORDER = ("A2", "A1", "B2", "B1")
 
 
+def _exact_cost(params, beta, varsigma=1.57):
+    """Exact, noiseless cost — same formula as
+    gibbs_tfd_reproduction/verify_exact_cost.py's exact_cost, reimplemented
+    here (not imported) since that module uses bare imports that only
+    resolve when gibbs_tfd_reproduction/ itself is on sys.path, and has a
+    top-level print() side effect on import. Takes `params` as a single
+    array (scipy's calling convention) rather than four positional args.
+    """
+    g1, g2, a1, a2 = params
+    sv = TFDCircuit(g1, g2, a1, a2).get_state_vector()
+    exp_X_A = sv.expectation_value(Pauli("IIXI")).real + sv.expectation_value(Pauli("IIIX")).real
+    exp_X_B = sv.expectation_value(Pauli("XIII")).real + sv.expectation_value(Pauli("IXII")).real
+    exp_ZZ_A = sv.expectation_value(Pauli("IIZZ")).real
+    exp_ZZ_B = sv.expectation_value(Pauli("ZZII")).real
+    exp_XX_BA = sv.expectation_value(Pauli("XIXI")).real + sv.expectation_value(Pauli("IXIX")).real
+    exp_ZZ_BA = sv.expectation_value(Pauli("ZIZI")).real + sv.expectation_value(Pauli("IZIZ")).real
+    return (exp_X_A + exp_X_B + varsigma * (exp_ZZ_A + exp_ZZ_B)
+            - beta ** (-varsigma) * (exp_XX_BA + exp_ZZ_BA))
+
+
 class _Aborted(Exception):
     """Raised from inside scipy's optimizer callback to unwind minimize()
     cleanly when the user hits Stop (verified against COBYLA/Nelder-Mead/
-    Powell — see the callback= plumbing added to cost_function.minimize_cost)."""
+    Powell)."""
 
 
 class OptimizationWorker(QObject):
@@ -71,7 +102,6 @@ class OptimizationWorker(QObject):
 
     def run(self):
         config = self.config
-        cost_fn = CostFunction(varsigma=1.57)
         x0 = np.array([config.gamma1, config.gamma2, config.alpha1, config.alpha2])
         iteration = [0]
 
@@ -92,7 +122,7 @@ class OptimizationWorker(QObject):
             if self._abort:
                 raise _Aborted()
             iteration[0] += 1
-            cost = cost_fn.cost_function(xk, config.beta)
+            cost = _exact_cost(xk, config.beta)
             self.progress.emit(iteration[0], float(cost))
             if iteration[0] % rho_every == 0:
                 try:
@@ -106,10 +136,11 @@ class OptimizationWorker(QObject):
             f"Starting optimization  |  beta={config.beta}  optimizer={config.optimizer}")
 
         try:
-            final_params = cost_fn.minimize_cost(
-                x0, config.beta, method=config.optimizer,
-                maxiter=config.iterations, callback=callback,
+            result = minimize(
+                _exact_cost, x0=x0, args=(config.beta,), method=config.optimizer,
+                options={'maxiter': config.iterations}, callback=callback,
             )
+            final_params = result.x
         except _Aborted:
             self.log.emit("Aborted.")
             self.finished.emit({"aborted": True})
@@ -121,7 +152,7 @@ class OptimizationWorker(QObject):
 
         final_circuit = TFDCircuit(*final_params)
         rho_final = partial_trace(final_circuit.get_state_vector(), [2, 3]).data
-        final_cost = float(cost_fn.cost_function(final_params, config.beta))
+        final_cost = float(_exact_cost(final_params, config.beta))
 
         # How good the prepared state actually is, not just how low the
         # (engineered, proxy) cost got: fidelity against the true Gibbs
