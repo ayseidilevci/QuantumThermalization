@@ -366,13 +366,19 @@ class ExperimentWindow(QWidget):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(10)
 
+        # Left: loss gets its own full-height column (more room to breathe).
+        # Right: fidelity (top) and the density matrix (bottom) share a
+        # second column, stacked.
         plots_row = QHBoxLayout()
         self.loss_canvas = MplCanvas()
         self.fidelity_canvas = MplCanvas()
         self.rho_canvas = MplCanvas(height=4.0, use_layout=False)
+
         plots_row.addWidget(panel("Loss minimization (live)", self.loss_canvas,
                                    on_save=self._save_loss), stretch=1)
-        plots_row.addWidget(panel("Fidelity to target (live)", self.fidelity_canvas,
+
+        right_col = QVBoxLayout()
+        right_col.addWidget(panel("Fidelity to target (live)", self.fidelity_canvas,
                                    on_save=self._save_fidelity), stretch=1)
 
         rho_panel = panel("Reduced density matrix ρ_A", self.rho_canvas,
@@ -393,7 +399,9 @@ class ExperimentWindow(QWidget):
         """)
         self.density_toggle_btn.toggled.connect(self._on_toggle_density_view)
         rho_panel.layout().addWidget(self.density_toggle_btn)
-        plots_row.addWidget(rho_panel, stretch=1)
+        right_col.addWidget(rho_panel, stretch=1)
+
+        plots_row.addLayout(right_col, stretch=1)
 
         main_layout.addLayout(plots_row, stretch=1)
 
