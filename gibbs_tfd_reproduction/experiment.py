@@ -47,7 +47,7 @@ for beta in betas:
     x0 = angles
     print(f"beta={beta}: angles={angles}")
 
-    lower_bound = CostFunction.exact_lower_bound(beta, cost_function.varsigma)
+    lower_bound = CostFunction.cost_lower_bound(beta, cost_function.varsigma)
 
     
     fig, ax = plt.subplots()
@@ -63,10 +63,14 @@ for beta in betas:
     g1, g2, a1, a2 = angles
     classical_target = gibbs.gibbs_density_matrix(beta=beta)
 
-    corrected_probs_A, settings_A = run_tomography(backend, initial_layout, g1, g2, a1, a2, subsystem_qubits=(0, 1), shots=8192)
+    corrected_probs_A, settings_A = run_tomography(backend, initial_layout, g1, g2, a1, a2,
+                                                subsystem_qubits=(0, 1), shots=8192,
+                                                ro_matrices=cost_function.ro_matrices)
     rho_A = reconstruct_density_matrix(corrected_probs_A, settings_A, subsystem_qubits=(0, 1))
 
-    corrected_probs_B, settings_B = run_tomography(backend, initial_layout, g1, g2, a1, a2, subsystem_qubits=(2, 3), shots=8192)
+    corrected_probs_B, settings_B = run_tomography(backend, initial_layout, g1, g2, a1, a2,
+                                                subsystem_qubits=(2, 3), shots=8192,
+                                                ro_matrices=cost_function.ro_matrices)
     rho_B = reconstruct_density_matrix(corrected_probs_B, settings_B, subsystem_qubits=(2, 3))
 
     plot_tomography_grid(rho_A, rho_B, classical_target, beta,

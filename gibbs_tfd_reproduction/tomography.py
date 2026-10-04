@@ -79,7 +79,7 @@ def build_tomography_circuit(gamma1, gamma2, alpha1, alpha2, subsystem_qubits=(0
 
 
 def run_tomography(backend, initial_layout, gamma1, gamma2, alpha1, alpha2,
-                    subsystem_qubits=(0, 1), shots=8192):
+                    subsystem_qubits=(0, 1), shots=8192, ro_matrices=None):
     qc, settings = build_tomography_circuit(gamma1, gamma2, alpha1, alpha2, subsystem_qubits)
     qc_t = transpile(qc, backend, initial_layout=initial_layout)
 
@@ -89,13 +89,13 @@ def run_tomography(backend, initial_layout, gamma1, gamma2, alpha1, alpha2,
     raw = get_raw_data(qc_t, result)
     counts = get_multi_counts(raw, N_QUBITS)
     probs = get_multi_probs(counts)
-
     setting_probs = probs[:9]
-    calib0_counts, calib1_counts = counts[9], counts[10]
-    ro_matrices = extract_ro_matrices(calib0_counts, calib1_counts)
 
-    corrected = [apply_readout_assignment_correction(p, ro_matrices, [0, 1, 2, 3])
-                 for p in setting_probs]
+    if ro_matrices is None:
+        corrected = setting_probs
+    else:
+        corrected = [apply_readout_assignment_correction(p, ro_matrices, [0, 1, 2, 3])
+                     for p in setting_probs]
     return corrected, settings
 
 
@@ -196,24 +196,11 @@ def plot_tomography_grid(rho_A, rho_B, rho_target, beta, save_path=None):
     dz_T, colors_T = bar_data(rho_target)
     zmax = max(0.55, dz_A.max()*1.1, dz_B.max()*1.1, dz_T.max()*1.1)
 
-    fig = plt.figure(figsize=(17, 10))
+    fig = plt.figure(figsize=(12, 10)) 
 
     def plain_panel(pos, dz, colors, title):
-        ax = fig.add_subplot(2, 3, pos, projection="3d")
+        ax = fig.add_subplot(2, 2, pos, projection="3d")
         ax.bar3d(xpos, ypos, np.zeros_like(dz), 0.6, 0.6, dz, color=colors, shade=True)
-        ax.set_xticks(np.arange(n)+0.3); ax.set_xticklabels(labels, fontsize=7)
-        ax.set_yticks(np.arange(n)+0.3); ax.set_yticklabels(labels, fontsize=7)
-        ax.set_zlim(0, zmax)
-        ax.set_title(title, fontsize=10)
-        return ax
-
-    def overlay_panel(pos, dz_meas, colors_meas, title):
-        ax = fig.add_subplot(2, 3, pos, projection="3d")
-        ax.bar3d(xpos, ypos, np.zeros_like(dz_T), 0.6, 0.6, dz_T,
-                  color=(0,0,0,0), edgecolor='green', linewidth=0.6,
-                  hatch='////', shade=False)
-        ax.bar3d(xpos+0.05, ypos+0.05, np.zeros_like(dz_meas), 0.45, 0.45, dz_meas,
-                  color=colors_meas, shade=True)
         ax.set_xticks(np.arange(n)+0.3); ax.set_xticklabels(labels, fontsize=7)
         ax.set_yticks(np.arange(n)+0.3); ax.set_yticklabels(labels, fontsize=7)
         ax.set_zlim(0, zmax)
@@ -222,11 +209,8 @@ def plot_tomography_grid(rho_A, rho_B, rho_target, beta, save_path=None):
 
     plain_panel(1, dz_A, colors_A, "System A -- measured")
     plain_panel(2, dz_T, colors_T, "Exact target (Gibbs state)")
-    overlay_panel(3, dz_A, colors_A, "System A -- overlay\n(solid=measured, hatched=exact)")
-
-    plain_panel(4, dz_B, colors_B, "System B -- measured")
-    plain_panel(5, dz_T, colors_T, "Exact target (Gibbs state)")
-    overlay_panel(6, dz_B, colors_B, "System B -- overlay\n(solid=measured, hatched=exact)")
+    plain_panel(3, dz_B, colors_B, "System B -- measured")
+    plain_panel(4, dz_T, colors_T, "Exact target (Gibbs state)")
 
     norm = Normalize(vmin=-np.pi, vmax=np.pi)
     mappable = ScalarMappable(norm=norm, cmap="hsv")

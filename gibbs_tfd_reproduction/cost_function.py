@@ -118,7 +118,7 @@ class CostFunction:
         # optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='BFGS', options={'maxiter': 100, 'eps': 0.1})
         return optimized_params.x
     
-    def exact_lower_bound(beta, varsigma=1.57):
+    def cost_lower_bound(beta, varsigma=1.57):
         paulis = {
             "IIXI": 1, "IIIX": 1,
             "XIII": 1, "IXII": 1,
