@@ -96,6 +96,7 @@ class OptimizationWorker(QObject):
     """
 
     progress = Signal(int, float)
+    fidelity_progress = Signal(int, float)
     rho_progress = Signal(object)
     finished = Signal(object)
     log = Signal(str)
@@ -114,6 +115,17 @@ class OptimizationWorker(QObject):
         x0 = np.array([config.gamma1, config.gamma2, config.alpha1, config.alpha2])
         iteration = [0]
 
+        # Computed once up front rather than per-iteration or only at the
+        # end: the true Gibbs state depends only on beta, not on the
+        # optimizer's current guess, so the live fidelity trace below and
+        # the final result further down can share this one reference.
+        try:
+            target = DensityMatrix(
+                GibbsState(default_subsystem_hamiltonian()).gibbs_density_matrix(config.beta))
+        except Exception as exc:
+            self.log.emit(f"Couldn't compute the true Gibbs state: {exc}")
+            target = None
+
         # The live density-matrix preview is by far the most expensive thing
         # to redraw (a full 3D bar plot + colorbar rebuild, ~20-100ms each),
         # and it runs on the UI thread since Qt marshals the signal there.
@@ -124,7 +136,9 @@ class OptimizationWorker(QObject):
         # number of live previews across the whole run instead — the actual
         # optimization (this is a local statevector simulation, not a
         # hardware round-trip) finishes in well under a second regardless of
-        # iteration count.
+        # iteration count. Fidelity itself is just linear algebra on a 4x4
+        # matrix (no redraw of an expensive 3D plot involved) so, unlike the
+        # density preview, it doesn't need the same throttling.
         rho_every = max(1, config.iterations // 20)
 
         def callback(xk):
@@ -133,13 +147,15 @@ class OptimizationWorker(QObject):
             iteration[0] += 1
             cost = _exact_cost(xk, config.beta)
             self.progress.emit(iteration[0], float(cost))
-            if iteration[0] % rho_every == 0:
-                try:
-                    circuit = TFDCircuit(*xk)
-                    rho_a = partial_trace(circuit.get_state_vector(), [2, 3]).data
+            try:
+                rho_a = partial_trace(TFDCircuit(*xk).get_state_vector(), [2, 3]).data
+                if iteration[0] % rho_every == 0:
                     self.rho_progress.emit(rho_a)
-                except Exception:
-                    pass  # a live preview glitch shouldn't kill the optimization
+                if target is not None:
+                    fid = state_fidelity(DensityMatrix(rho_a), target, validate=False)
+                    self.fidelity_progress.emit(iteration[0], float(fid))
+            except Exception:
+                pass  # a live preview glitch shouldn't kill the optimization
             time.sleep(_STEP_DELAY_SECONDS)
 
         self.log.emit(
@@ -168,13 +184,13 @@ class OptimizationWorker(QObject):
         # (engineered, proxy) cost got: fidelity against the true Gibbs
         # state ρ ∝ exp(-βH) — the same ground-truth check
         # gibbs_tfd_reproduction/experiment.py runs after optimizing.
-        try:
-            gibbs = GibbsState(default_subsystem_hamiltonian())
-            target = DensityMatrix(gibbs.gibbs_density_matrix(config.beta))
-            fidelity = float(state_fidelity(DensityMatrix(rho_final), target))
-        except Exception as exc:
-            self.log.emit(f"Couldn't compute fidelity to the true Gibbs state: {exc}")
-            fidelity = None
+        # Reuses `target` computed once above rather than recomputing it.
+        fidelity = None
+        if target is not None:
+            try:
+                fidelity = float(state_fidelity(DensityMatrix(rho_final), target, validate=False))
+            except Exception as exc:
+                self.log.emit(f"Couldn't compute final fidelity: {exc}")
 
         self.log.emit("Optimization complete. Submitting circuit to Quantum Inspire...")
         submitted = False
@@ -215,9 +231,12 @@ class ExperimentWindow(QWidget):
         self.worker = None
         self.config = None
         self.loss_x, self.loss_y = [], []
+        self.fidelity_x, self.fidelity_y = [], []
         self._last_qc = None
         self._last_rho = None
         self._last_params = None
+        self._target_rho = None
+        self._density_view = "observed"
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -349,11 +368,33 @@ class ExperimentWindow(QWidget):
 
         plots_row = QHBoxLayout()
         self.loss_canvas = MplCanvas()
+        self.fidelity_canvas = MplCanvas()
         self.rho_canvas = MplCanvas(height=4.0, use_layout=False)
         plots_row.addWidget(panel("Loss minimization (live)", self.loss_canvas,
                                    on_save=self._save_loss), stretch=1)
-        plots_row.addWidget(panel("Reduced density matrix ρ_A", self.rho_canvas,
-                                   on_save=self._save_density), stretch=1)
+        plots_row.addWidget(panel("Fidelity to target (live)", self.fidelity_canvas,
+                                   on_save=self._save_fidelity), stretch=1)
+
+        rho_panel = panel("Reduced density matrix ρ_A", self.rho_canvas,
+                           on_save=self._save_density)
+        self.density_toggle_btn = QPushButton("👁  Show ideal result")
+        self.density_toggle_btn.setCheckable(True)
+        self.density_toggle_btn.setEnabled(False)
+        self.density_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.density_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.TEXT_DIM};
+                border: 1px solid {Colors.BORDER}; border-radius: 8px;
+                padding: 6px; font-weight: 600;
+            }}
+            QPushButton:hover:enabled {{ color: {Colors.TEXT}; border-color: {Colors.ACCENT}; }}
+            QPushButton:checked {{ color: {Colors.ACCENT}; border-color: {Colors.ACCENT}; }}
+            QPushButton:disabled {{ color: {Colors.TEXT_MUTED}; }}
+        """)
+        self.density_toggle_btn.toggled.connect(self._on_toggle_density_view)
+        rho_panel.layout().addWidget(self.density_toggle_btn)
+        plots_row.addWidget(rho_panel, stretch=1)
+
         main_layout.addLayout(plots_row, stretch=1)
 
         circuit_toggle = QPushButton("▸  Circuit diagram")
@@ -381,6 +422,7 @@ class ExperimentWindow(QWidget):
         root.addWidget(main, stretch=1)
 
         self.init_loss_plot()
+        self.init_fidelity_plot()
         self._draw_empty_density()
 
     # -----------------------------------------------------
@@ -400,8 +442,23 @@ class ExperimentWindow(QWidget):
         self.result_lbl.setText("")
         self.status_log.clear()
         self.init_loss_plot()
+        self.init_fidelity_plot()
         self._draw_circuit_for(
             [config.gamma1, config.gamma2, config.alpha1, config.alpha2])
+
+        self._density_view = "observed"
+        self.density_toggle_btn.blockSignals(True)
+        self.density_toggle_btn.setChecked(False)
+        self.density_toggle_btn.blockSignals(False)
+        self.density_toggle_btn.setText("👁  Show ideal result")
+        self.density_toggle_btn.setEnabled(False)
+        try:
+            self._target_rho = DensityMatrix(
+                GibbsState(default_subsystem_hamiltonian()).gibbs_density_matrix(config.beta)).data
+        except Exception as exc:
+            self._on_log(f"Couldn't compute the true Gibbs state: {exc}")
+            self._target_rho = None
+        self.density_toggle_btn.setEnabled(self._target_rho is not None)
         self._draw_empty_density()
 
         self.thread = QThread()
@@ -409,6 +466,7 @@ class ExperimentWindow(QWidget):
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.progress.connect(self._on_progress)
+        self.worker.fidelity_progress.connect(self._on_fidelity_progress)
         self.worker.rho_progress.connect(self._draw_density)
         self.worker.log.connect(self._on_log)
         self.worker.finished.connect(self._on_finished)
@@ -484,6 +542,12 @@ class ExperimentWindow(QWidget):
         # throttled live preview (see OptimizationWorker.run) last landed.
         self._draw_density(result["rho"])
         fidelity = result.get("fidelity")
+        if fidelity is not None:
+            # Make sure the live curve's last point matches the reported
+            # result exactly, even if result.x differs slightly from the
+            # last xk the callback saw.
+            final_it = (self.fidelity_x[-1] + 1) if self.fidelity_x else 1
+            self._on_fidelity_progress(final_it, fidelity)
         fidelity_line = (
             f"Fidelity to true Gibbs state: {fidelity:.4f}\n" if fidelity is not None
             else "")
@@ -528,11 +592,52 @@ class ExperimentWindow(QWidget):
         self._loss_ax.autoscale_view()
         self.loss_canvas.draw_idle()
 
+    def init_fidelity_plot(self):
+        self.fidelity_x, self.fidelity_y = [], []
+        fig = self.fidelity_canvas.fig
+        fig.clear()
+        ax = fig.add_subplot(111)
+        self._fidelity_ax = ax
+        self._fidelity_expected_line = ax.axhline(
+            1.0, color=Colors.GOOD, alpha=0.55, linewidth=2, linestyle="--",
+            zorder=3, label="Expected (ideal)")
+        self._fidelity_gap_fill = None
+        (self._fidelity_line,) = ax.plot([], [], "-", color=Colors.ACCENT, linewidth=2.2,
+                                          solid_capstyle="round", zorder=2, label="Observed")
+        (self._fidelity_head,) = ax.plot([], [], "o", color=Colors.ACCENT_HOVER,
+                                          markersize=6, markeredgecolor=Colors.BG_3,
+                                          markeredgewidth=1.2, zorder=2)
+        style_axes(ax, title="Fidelity to target", xlabel="Iteration", ylabel="Fidelity")
+        ax.set_ylim(0, 1.05)
+        ax.legend(loc="lower right", fontsize=8, facecolor=Colors.BG_3,
+                  edgecolor=Colors.BORDER, labelcolor=Colors.TEXT_DIM)
+        self.fidelity_canvas.draw()
+
+    def _on_fidelity_progress(self, it: int, fid: float):
+        self.fidelity_x.append(it)
+        self.fidelity_y.append(fid)
+        self._fidelity_line.set_data(self.fidelity_x, self.fidelity_y)
+        self._fidelity_head.set_data([it], [fid])
+        if self._fidelity_gap_fill is not None:
+            self._fidelity_gap_fill.remove()
+        self._fidelity_gap_fill = self._fidelity_ax.fill_between(
+            self.fidelity_x, self.fidelity_y, 1.0,
+            color=Colors.GOOD, alpha=0.12, linewidth=0, zorder=1)
+        self.fidelity_canvas.draw_idle()
+
     def _draw_empty_density(self):
         self._draw_density(np.eye(4, dtype=complex) / 4)
 
     def _draw_density(self, rho: np.ndarray):
+        """Connected to the worker's live rho_progress and called from
+        _on_finished — always remembers the latest observed matrix, but
+        only redraws the canvas if that's the view currently selected (see
+        density_toggle_btn / _on_toggle_density_view)."""
         self._last_rho = rho
+        if self._density_view == "observed":
+            self._render_density(rho, title="Observed (live)")
+
+    def _render_density(self, rho: np.ndarray, title: str):
         fig = self.rho_canvas.fig
         fig.clear()
         fig.subplots_adjust(left=0.02, right=0.82, bottom=0.05, top=0.92)
@@ -559,11 +664,13 @@ class ExperimentWindow(QWidget):
         ax.set_xticks(np.arange(n) + 0.35); ax.set_xticklabels(labels)
         ax.set_yticks(np.arange(n) + 0.35); ax.set_yticklabels(labels)
         ax.set_zlabel("|ρ|")
-        # No in-plot title: the panel() card above already headers this
-        # "Reduced density matrix ρ_A", and a 3D-axes title here doesn't
-        # respect the panel's width (it overflows past the canvas edges
-        # once the panel gets narrow) — the z-axis/colorbar labels below
-        # already say height=|ρ|, colour=phase without that risk.
+        ax.text2D(0.02, 0.98, title, transform=ax.transAxes, fontsize=9,
+                   color=Colors.TEXT_DIM, va="top")
+        # No in-plot title via ax.set_title(): the panel() card above already
+        # headers this "Reduced density matrix ρ_A", and a 3D-axes title here
+        # doesn't respect the panel's width (it overflows past the canvas
+        # edges once the panel gets narrow) — the small text2D label above
+        # just distinguishes the two toggle states without that risk.
 
         sm = cm.ScalarMappable(cmap=cm.twilight, norm=mcolors.Normalize(vmin=-np.pi, vmax=np.pi))
         cbar = fig.colorbar(sm, ax=ax, shrink=0.55, pad=0.15, ticks=[-np.pi, 0, np.pi])
@@ -571,6 +678,18 @@ class ExperimentWindow(QWidget):
         cbar.set_label("phase", color=Colors.TEXT_DIM, fontsize=9)
         cbar.outline.set_edgecolor(Colors.BORDER)
         self.rho_canvas.draw_idle()
+
+    def _on_toggle_density_view(self, checked: bool):
+        if checked:
+            self._density_view = "ideal"
+            self.density_toggle_btn.setText("↩  Back to optimizer result")
+            rho = self._target_rho if self._target_rho is not None else np.eye(4, dtype=complex) / 4
+            self._render_density(rho, title="True Gibbs state (ideal)")
+        else:
+            self._density_view = "observed"
+            self.density_toggle_btn.setText("👁  Show ideal result")
+            rho = self._last_rho if self._last_rho is not None else np.eye(4, dtype=complex) / 4
+            self._render_density(rho, title="Observed (live)")
 
     def _draw_circuit_for(self, params):
         qc = TFDCircuit(*params).as_qiskit_circuit()
@@ -647,8 +766,27 @@ class ExperimentWindow(QWidget):
                 w.writerow(["iteration", "cost"])
                 w.writerows(zip(self.loss_x, self.loss_y))
 
+    def _save_fidelity(self):
+        if not self.fidelity_x:
+            QMessageBox.information(self, "Nothing to save", "Run an optimization first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save fidelity curve", "fidelity.csv", "CSV data (*.csv);;PNG image (*.png)")
+        if not path:
+            return
+        if path.lower().endswith(".png"):
+            self.fidelity_canvas.fig.savefig(path, facecolor=self.fidelity_canvas.fig.get_facecolor())
+        else:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["iteration", "fidelity"])
+                w.writerows(zip(self.fidelity_x, self.fidelity_y))
+
     def _save_density(self):
-        if self._last_rho is None:
+        # Save whichever matrix is currently on screen (live/observed or the
+        # toggled-in ideal target), not always the live one.
+        displayed_rho = self._target_rho if self._density_view == "ideal" else self._last_rho
+        if displayed_rho is None:
             QMessageBox.information(self, "Nothing to save", "No density matrix yet.")
             return
         path, _ = QFileDialog.getSaveFileName(
@@ -660,11 +798,11 @@ class ExperimentWindow(QWidget):
         if lower.endswith(".png"):
             self.rho_canvas.fig.savefig(path, facecolor=self.rho_canvas.fig.get_facecolor())
         elif lower.endswith(".npy"):
-            np.save(path, self._last_rho)
+            np.save(path, displayed_rho)
         else:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
                 w.writerow(["# real part"])
-                w.writerows(self._last_rho.real.tolist())
+                w.writerows(displayed_rho.real.tolist())
                 w.writerow(["# imag part"])
-                w.writerows(self._last_rho.imag.tolist())
+                w.writerows(displayed_rho.imag.tolist())
