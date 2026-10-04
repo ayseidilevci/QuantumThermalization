@@ -12,7 +12,18 @@ from qi_utilities.error_mitigation.toolkit.readout_error_mitigation import (
     apply_readout_assignment_correction,
 )
 
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 from tfd_circuit import TFDCircuit
+
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
+
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 
 N_QUBITS = 4
 PAULIS = ["X", "Y", "Z"]
@@ -30,10 +41,6 @@ def extract_ro_matrices(counts_prep0: dict, counts_prep1: dict, num_qubits: int 
 
 
 def build_tomography_circuit(gamma1, gamma2, alpha1, alpha2, subsystem_qubits=(0, 1)):
-    """
-    subsystem_qubits: (0,1) for system A, (2,3) for system B (tfd_circuit.py defines
-    q0=A2, q1=A1, q2=B2, q3=B1).
-    """
     qa, qb = subsystem_qubits
     settings = list(product(PAULIS, PAULIS))
 
@@ -55,18 +62,18 @@ def build_tomography_circuit(gamma1, gamma2, alpha1, alpha2, subsystem_qubits=(0
             qc.reset(q)
         qc.barrier()
 
-    # readout calibration block
-    offset = 4 * len(settings)
-    for q in range(N_QUBITS):
-        qc.measure(q, offset + q)
-    qc.barrier()
-    for q in range(N_QUBITS):
-        qc.reset(q)
-    qc.barrier()
-    qc.x(range(N_QUBITS))
-    qc.barrier()
-    for q in range(N_QUBITS):
-        qc.measure(q, offset + 4 + q)
+    # # readout calibration block
+    # offset = 4 * len(settings)
+    # for q in range(N_QUBITS):
+    #     qc.measure(q, offset + q)
+    # qc.barrier()
+    # for q in range(N_QUBITS):
+    #     qc.reset(q)
+    # qc.barrier()
+    # qc.x(range(N_QUBITS))
+    # qc.barrier()
+    # for q in range(N_QUBITS):
+    #     qc.measure(q, offset + 4 + q)
 
     return qc, settings
 
@@ -123,24 +130,113 @@ def reconstruct_density_matrix(corrected_probs, settings, subsystem_qubits=(0, 1
     return rho / 4.0
 
 
-def plot_density_matrix(rho, title="Reconstructed density matrix", save_path=None):
+def plot_density_matrix(rho, title="Reconstructed density matrix", save_path=None, rho_target=None):
     labels = ["00", "01", "10", "11"]
     n = 4
     xpos, ypos = np.meshgrid(range(n), range(n), indexing="ij")
     xpos, ypos = xpos.ravel(), ypos.ravel()
-    dz = np.abs(rho).ravel()
-    phase = np.angle(rho).ravel()
-    colors = plt.get_cmap("hsv")((phase + np.pi) / (2 * np.pi))
 
-    fig = plt.figure(figsize=(6, 5))
-    ax = fig.add_subplot(111, projection="3d")
-    ax.bar3d(xpos, ypos, np.zeros_like(dz), 0.6, 0.6, dz, color=colors, shade=True)
-    ax.set_xticks(np.arange(n) + 0.3)
-    ax.set_xticklabels(labels)
-    ax.set_yticks(np.arange(n) + 0.3)
-    ax.set_yticklabels(labels)
-    ax.set_zlim(0, max(0.55, dz.max() * 1.1))
-    ax.set_title(title)
+    def bar_data(m):
+        dz = np.abs(m).ravel()
+        phase = np.angle(m).ravel()
+        colors = plt.get_cmap("hsv")((phase + np.pi) / (2 * np.pi))
+        return dz, colors
+
+    dz_meas, colors_meas = bar_data(rho)
+    zmax = max(0.55, dz_meas.max() * 1.1)
+    if rho_target is not None:
+        dz_target, colors_target = bar_data(rho_target)
+        zmax = max(zmax, dz_target.max() * 1.1)
+
+    ncols = 2 if rho_target is not None else 1
+    fig = plt.figure(figsize=(6 * ncols, 5.5))
+
+    ax1 = fig.add_subplot(1, ncols, 1, projection="3d")
+    ax1.bar3d(xpos, ypos, np.zeros_like(dz_meas), 0.6, 0.6, dz_meas, color=colors_meas, shade=True)
+    ax1.set_xticks(np.arange(n) + 0.3); ax1.set_xticklabels(labels)
+    ax1.set_yticks(np.arange(n) + 0.3); ax1.set_yticklabels(labels)
+    ax1.set_zlim(0, zmax)
+    ax1.set_title(f"{title}\n(measured)")
+
+    if rho_target is not None:
+        ax2 = fig.add_subplot(1, ncols, 2, projection="3d")
+        ax2.bar3d(xpos, ypos, np.zeros_like(dz_target), 0.6, 0.6, dz_target, color=colors_target, shade=True)
+        ax2.set_xticks(np.arange(n) + 0.3); ax2.set_xticklabels(labels)
+        ax2.set_yticks(np.arange(n) + 0.3); ax2.set_yticklabels(labels)
+        ax2.set_zlim(0, zmax)
+        ax2.set_title(f"{title}\n(exact target)")
+
+    norm = Normalize(vmin=-np.pi, vmax=np.pi)
+    mappable = ScalarMappable(norm=norm, cmap="hsv")
+    mappable.set_array([])
+    cbar = fig.colorbar(mappable, ax=fig.get_axes(), shrink=0.6, pad=0.05)
+    cbar.set_label("Phase (radians)")
+    cbar.set_ticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
+    cbar.set_ticklabels(["-π", "-π/2", "0", "π/2", "π"])
+
+    if save_path:
+        fig.savefig(save_path, dpi=120)
+    plt.close(fig)
+    return fig
+
+def plot_tomography_grid(rho_A, rho_B, rho_target, beta, save_path=None):
+    labels = ["00", "01", "10", "11"]
+    n = 4
+    xpos, ypos = np.meshgrid(range(n), range(n), indexing="ij")
+    xpos, ypos = xpos.ravel(), ypos.ravel()
+
+    def bar_data(m):
+        dz = np.abs(m).ravel()
+        phase = np.angle(m).ravel()
+        colors = plt.get_cmap("hsv")((phase + np.pi) / (2 * np.pi))
+        return dz, colors
+
+    dz_A, colors_A = bar_data(rho_A)
+    dz_B, colors_B = bar_data(rho_B)
+    dz_T, colors_T = bar_data(rho_target)
+    zmax = max(0.55, dz_A.max()*1.1, dz_B.max()*1.1, dz_T.max()*1.1)
+
+    fig = plt.figure(figsize=(17, 10))
+
+    def plain_panel(pos, dz, colors, title):
+        ax = fig.add_subplot(2, 3, pos, projection="3d")
+        ax.bar3d(xpos, ypos, np.zeros_like(dz), 0.6, 0.6, dz, color=colors, shade=True)
+        ax.set_xticks(np.arange(n)+0.3); ax.set_xticklabels(labels, fontsize=7)
+        ax.set_yticks(np.arange(n)+0.3); ax.set_yticklabels(labels, fontsize=7)
+        ax.set_zlim(0, zmax)
+        ax.set_title(title, fontsize=10)
+        return ax
+
+    def overlay_panel(pos, dz_meas, colors_meas, title):
+        ax = fig.add_subplot(2, 3, pos, projection="3d")
+        ax.bar3d(xpos, ypos, np.zeros_like(dz_T), 0.6, 0.6, dz_T,
+                  color=(0,0,0,0), edgecolor='green', linewidth=0.6,
+                  hatch='////', shade=False)
+        ax.bar3d(xpos+0.05, ypos+0.05, np.zeros_like(dz_meas), 0.45, 0.45, dz_meas,
+                  color=colors_meas, shade=True)
+        ax.set_xticks(np.arange(n)+0.3); ax.set_xticklabels(labels, fontsize=7)
+        ax.set_yticks(np.arange(n)+0.3); ax.set_yticklabels(labels, fontsize=7)
+        ax.set_zlim(0, zmax)
+        ax.set_title(title, fontsize=10)
+        return ax
+
+    plain_panel(1, dz_A, colors_A, "System A -- measured")
+    plain_panel(2, dz_T, colors_T, "Exact target (Gibbs state)")
+    overlay_panel(3, dz_A, colors_A, "System A -- overlay\n(solid=measured, hatched=exact)")
+
+    plain_panel(4, dz_B, colors_B, "System B -- measured")
+    plain_panel(5, dz_T, colors_T, "Exact target (Gibbs state)")
+    overlay_panel(6, dz_B, colors_B, "System B -- overlay\n(solid=measured, hatched=exact)")
+
+    norm = Normalize(vmin=-np.pi, vmax=np.pi)
+    mappable = ScalarMappable(norm=norm, cmap="hsv")
+    mappable.set_array([])
+    cbar = fig.colorbar(mappable, ax=fig.get_axes(), shrink=0.5, pad=0.02, location='left')
+    cbar.set_label("Phase (radians)")
+    cbar.set_ticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
+    cbar.set_ticklabels(["-π", "-π/2", "0", "π/2", "π"])
+
+    fig.suptitle(f"Tomography, beta={beta}", fontsize=14)
 
     if save_path:
         fig.savefig(save_path, dpi=120)

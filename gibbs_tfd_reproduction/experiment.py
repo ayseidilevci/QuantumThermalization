@@ -6,8 +6,9 @@ import matplotlib.pyplot as plt
 from ground_truth import GibbsState, TFDState, default_subsystem_hamiltonian
 from tfd_circuit import TFDCircuit
 from cost_function import CostFunction
-from tomography import run_tomography, reconstruct_density_matrix, plot_density_matrix
+from tomography import run_tomography, reconstruct_density_matrix, plot_tomography_grid
 from qi_utilities.device_simulation.simulators import NoisySimulator
+
 
 H_AA = default_subsystem_hamiltonian()
 
@@ -46,8 +47,9 @@ for beta in betas:
     x0 = angles
     print(f"beta={beta}: angles={angles}")
 
-    lower_bound = -2 - 2*cost_function.varsigma - 2*beta**(-cost_function.varsigma)
+    lower_bound = CostFunction.exact_lower_bound(beta, cost_function.varsigma)
 
+    
     fig, ax = plt.subplots()
     ax.plot(cost_function.cost_history, marker='o', label="Cost C(beta)")
     ax.axhline(lower_bound, color='red', linestyle='--', label=f"theoretical lower bound = {lower_bound:.2f}")
@@ -59,13 +61,16 @@ for beta in betas:
     plt.close(fig)
 
     g1, g2, a1, a2 = angles
+    classical_target = gibbs.gibbs_density_matrix(beta=beta)
+
     corrected_probs_A, settings_A = run_tomography(backend, initial_layout, g1, g2, a1, a2, subsystem_qubits=(0, 1), shots=8192)
     rho_A = reconstruct_density_matrix(corrected_probs_A, settings_A, subsystem_qubits=(0, 1))
-    plot_density_matrix(rho_A, title=f"System A, beta={beta}", save_path=f"plots/tomography_beta{beta}_A.png")
 
     corrected_probs_B, settings_B = run_tomography(backend, initial_layout, g1, g2, a1, a2, subsystem_qubits=(2, 3), shots=8192)
     rho_B = reconstruct_density_matrix(corrected_probs_B, settings_B, subsystem_qubits=(2, 3))
-    plot_density_matrix(rho_B, title=f"System B, beta={beta}", save_path=f"plots/tomography_beta{beta}_B.png")
+
+    plot_tomography_grid(rho_A, rho_B, classical_target, beta,
+                          save_path=f"plots/tomography_beta{beta}_full.png")
     
     print("rho_A:\n", np.round(rho_A, 4))
     print("rho_B:\n", np.round(rho_B, 4))
