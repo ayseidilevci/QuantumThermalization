@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+from matplotlib.ticker import MaxNLocator
 
 from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtGui import QFont
@@ -47,6 +48,7 @@ from frontend.upload import save_session_dialog
 from frontend.plots import MplCanvas, style_axes, panel
 
 SIDEBAR_WIDTH = 300
+BOTTOM_BAR_HEIGHT = 200
 
 # Logical-qubit order TFDCircuit builds on (see tfd_circuit.py): q0=A2,
 # q1=A1, q2=B2, q3=B1. A role->physical-qubit mapping from the device panel
@@ -60,6 +62,14 @@ _LOGICAL_ROLE_ORDER = ("A2", "A1", "B2", "B1")
 # actually watchable during a demo instead of just snapping to the final
 # result. Tune down/remove for real runs where speed matters more.
 _STEP_DELAY_SECONDS = 0.06
+
+
+def _nice_limits(lo, hi, nbins=5, integer=False):
+    if lo == hi:
+        pad = abs(lo) * 0.1 or 0.1
+        lo, hi = lo - pad, hi + pad
+    ticks = MaxNLocator(nbins=nbins, integer=integer).tick_values(lo, hi)
+    return ticks[0], ticks[-1]
 
 
 def _exact_cost(params, beta, varsigma=1.57):
@@ -358,7 +368,7 @@ class ExperimentWindow(QWidget):
         root.addWidget(sidebar)
 
         # -------------------------------------------------
-        # Right main area — loss + density plots, circuit (collapsible)
+        # Right main area
         # -------------------------------------------------
 
         main = QWidget()
@@ -366,20 +376,14 @@ class ExperimentWindow(QWidget):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(10)
 
-        # Left: loss gets its own full-height column (more room to breathe).
-        # Right: fidelity (top) and the density matrix (bottom) share a
-        # second column, stacked.
-        plots_row = QHBoxLayout()
         self.loss_canvas = MplCanvas()
         self.fidelity_canvas = MplCanvas()
         self.rho_canvas = MplCanvas(height=4.0, use_layout=False)
 
-        plots_row.addWidget(panel("Loss minimization (live)", self.loss_canvas,
-                                   on_save=self._save_loss), stretch=1)
-
-        right_col = QVBoxLayout()
-        right_col.addWidget(panel("Fidelity to target (live)", self.fidelity_canvas,
-                                   on_save=self._save_fidelity), stretch=1)
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        top_row.addWidget(panel("Fidelity to target (live)", self.fidelity_canvas,
+                                 on_save=self._save_fidelity), stretch=1)
 
         rho_panel = panel("Reduced density matrix ρ_A", self.rho_canvas,
                            on_save=self._save_density)
@@ -399,11 +403,12 @@ class ExperimentWindow(QWidget):
         """)
         self.density_toggle_btn.toggled.connect(self._on_toggle_density_view)
         rho_panel.layout().addWidget(self.density_toggle_btn)
-        right_col.addWidget(rho_panel, stretch=1)
+        top_row.addWidget(rho_panel, stretch=1)
 
-        plots_row.addLayout(right_col, stretch=1)
+        main_layout.addLayout(top_row, stretch=1)
 
-        main_layout.addLayout(plots_row, stretch=1)
+        main_layout.addWidget(panel("Loss minimization (live)", self.loss_canvas,
+                                    on_save=self._save_loss), stretch=1)
 
         circuit_toggle = QPushButton("▸  Circuit diagram")
         circuit_toggle.setCheckable(True)
@@ -584,6 +589,7 @@ class ExperimentWindow(QWidget):
                                       markeredgewidth=1.2)
         self._loss_fill = None
         style_axes(ax, title="Loss minimization", xlabel="Iteration", ylabel="Cost  C(β)")
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         self.loss_canvas.draw()
 
     def _on_progress(self, it: int, cost: float):
@@ -596,8 +602,8 @@ class ExperimentWindow(QWidget):
         self._loss_fill = self._loss_ax.fill_between(
             self.loss_x, self.loss_y, min(self.loss_y),
             color=Colors.ACCENT, alpha=0.12, linewidth=0)
-        self._loss_ax.relim()
-        self._loss_ax.autoscale_view()
+        self._loss_ax.set_xlim(*_nice_limits(0, max(self.loss_x), integer=True))
+        self._loss_ax.set_ylim(*_nice_limits(min(self.loss_y), max(self.loss_y)))
         self.loss_canvas.draw_idle()
 
     def init_fidelity_plot(self):
@@ -617,6 +623,7 @@ class ExperimentWindow(QWidget):
                                           markeredgewidth=1.2, zorder=2)
         style_axes(ax, title="Fidelity to target", xlabel="Iteration", ylabel="Fidelity")
         ax.set_ylim(0, 1.05)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax.legend(loc="lower right", fontsize=8, facecolor=Colors.BG_3,
                   edgecolor=Colors.BORDER, labelcolor=Colors.TEXT_DIM)
         self.fidelity_canvas.draw()
@@ -631,6 +638,10 @@ class ExperimentWindow(QWidget):
         self._fidelity_gap_fill = self._fidelity_ax.fill_between(
             self.fidelity_x, self.fidelity_y, 1.0,
             color=Colors.GOOD, alpha=0.12, linewidth=0, zorder=1)
+        lo, _ = _nice_limits(min(self.fidelity_y), 1.0)
+        lo = max(lo, 0.0)  # fidelity can't go below 0
+        self._fidelity_ax.set_ylim(lo, 1.0 + (1.0 - lo) * 0.05)  # small headroom above the 1.0 line
+        self._fidelity_ax.set_xlim(*_nice_limits(0, max(self.fidelity_x), integer=True))
         self.fidelity_canvas.draw_idle()
 
     def _draw_empty_density(self):
