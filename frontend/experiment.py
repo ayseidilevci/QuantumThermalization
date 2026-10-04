@@ -18,6 +18,7 @@ stream dozens of steps smoothly in under a second.
 """
 
 import csv
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -51,6 +52,14 @@ SIDEBAR_WIDTH = 300
 # q1=A1, q2=B2, q3=B1. A role->physical-qubit mapping from the device panel
 # becomes a transpile() initial_layout in this order.
 _LOGICAL_ROLE_ORDER = ("A2", "A1", "B2", "B1")
+
+# Purely cosmetic: the exact statevector cost is sub-millisecond per
+# evaluation, so a run finishes before the loss curve or density-matrix
+# bars have any chance to visibly animate. A short pause per iteration
+# (on the worker thread, not the GUI thread) makes the live updates
+# actually watchable during a demo instead of just snapping to the final
+# result. Tune down/remove for real runs where speed matters more.
+_STEP_DELAY_SECONDS = 0.06
 
 
 def _exact_cost(params, beta, varsigma=1.57):
@@ -131,6 +140,7 @@ class OptimizationWorker(QObject):
                     self.rho_progress.emit(rho_a)
                 except Exception:
                     pass  # a live preview glitch shouldn't kill the optimization
+            time.sleep(_STEP_DELAY_SECONDS)
 
         self.log.emit(
             f"Starting optimization  |  beta={config.beta}  optimizer={config.optimizer}")
