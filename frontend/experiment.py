@@ -292,6 +292,21 @@ class ExperimentWindow(QWidget):
         self.stop_btn.clicked.connect(self.stop)
         side.addWidget(self.stop_btn)
 
+        self.restart_btn = QPushButton("↻  Run again")
+        self.restart_btn.setMinimumHeight(40)
+        self.restart_btn.setCursor(Qt.PointingHandCursor)
+        self.restart_btn.setEnabled(False)
+        self.restart_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.ACCENT};
+                border: 1px solid {Colors.ACCENT}; border-radius: 10px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: rgba(135,206,235,0.12); }}
+            QPushButton:disabled {{ color: {Colors.TEXT_MUTED}; border-color: {Colors.BORDER}; }}
+        """)
+        self.restart_btn.clicked.connect(self._on_restart)
+        side.addWidget(self.restart_btn)
+
         status_lbl = QLabel("Status")
         status_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-weight: 600;")
         side.addWidget(status_lbl)
@@ -380,6 +395,7 @@ class ExperimentWindow(QWidget):
         self.config = config
         self._last_params = None
         self.save_session_btn.setEnabled(False)
+        self.restart_btn.setEnabled(False)
         self._update_recap(config)
         self.result_lbl.setText("")
         self.status_log.clear()
@@ -404,10 +420,18 @@ class ExperimentWindow(QWidget):
         self.thread.start()
 
     def _on_thread_finished(self):
-        # Qt has scheduled the QThread object itself for deletion (see
-        # deleteLater above) — drop our own references too, so is_running
-        # (checked on every Home/Back-to-Setup click) doesn't touch a
-        # since-deleted C++ object and raise instead of just returning False.
+        # self.thread is a plain, unparented QThread(), so Python's own
+        # refcounting owns it — dropping our last reference below triggers
+        # *immediate* C++ destruction via shiboken, independent of (and
+        # potentially racing ahead of) the deleteLater() already queued
+        # above. QThread.finished firing means run() has returned, but
+        # wait() is the actual guarantee the OS thread has fully joined;
+        # skipping it was producing a real
+        # "QThread: Destroyed while thread '' is still running" abort,
+        # reliably reachable once something (e.g. the Run-again button)
+        # creates a new run shortly after the previous one finished.
+        if self.thread is not None:
+            self.thread.wait()
         self.thread = None
         self.worker = None
 
@@ -415,6 +439,17 @@ class ExperimentWindow(QWidget):
         if self.worker is not None:
             self.worker.abort()
         self.stop_btn.setEnabled(False)
+
+    def _on_restart(self):
+        # Re-run the same config from scratch — same starting angles, same
+        # backend/beta/optimizer/iterations — so the live loss/density
+        # animation plays again without a trip back through Setup. Guarded
+        # by is_running too, not just the button's enabled state, since
+        # start_run() tears down and replaces self.thread/self.worker and
+        # doing that while the previous run is still live would orphan it
+        # mid-flight.
+        if self.config is not None and not self.is_running:
+            self.start_run(self.config)
 
     # -----------------------------------------------------
     # Recap / logging
@@ -438,6 +473,7 @@ class ExperimentWindow(QWidget):
 
     def _on_finished(self, result: dict):
         self.stop_btn.setEnabled(False)
+        self.restart_btn.setEnabled(True)  # retry allowed whether this run succeeded, failed, or was stopped
         if result.get("aborted"):
             return
         params = result["params"]
