@@ -42,6 +42,11 @@ from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity, Pa
 from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
 from gibbs_tfd_reproduction.ground_truth import GibbsState, default_subsystem_hamiltonian
 
+import sys
+sys.path.append(str(Path(__file__).resolve().parent.parent / "gibbs_tfd_reproduction"))
+from gibbs_tfd_reproduction.cost_function import CostFunction
+from qi_utilities.device_simulation.simulators import NoisySimulator
+
 from frontend.colors import Colors
 from frontend.session import SessionConfig
 from frontend.upload import save_session_dialog
@@ -136,6 +141,11 @@ class OptimizationWorker(QObject):
             self.log.emit(f"Couldn't compute the true Gibbs state: {exc}")
             target = None
 
+        cost_fn = CostFunction(
+            varsigma=1.57,
+            backend=NoisySimulator("Starmon-7", ideal_simulation=False),
+        )
+
         # The live density-matrix preview is by far the most expensive thing
         # to redraw (a full 3D bar plot + colorbar rebuild, ~20-100ms each),
         # and it runs on the UI thread since Qt marshals the signal there.
@@ -155,10 +165,10 @@ class OptimizationWorker(QObject):
             if self._abort:
                 raise _Aborted()
             iteration[0] += 1
-            cost = _exact_cost(xk, config.beta)
+            cost = cost_fn.cost_history[-1]
             self.progress.emit(iteration[0], float(cost))
             try:
-                rho_a = partial_trace(TFDCircuit(*xk).get_state_vector(), [2, 3]).data
+                rho_a = cost_fn.tomography_history[-1]
                 if iteration[0] % rho_every == 0:
                     self.rho_progress.emit(rho_a)
                 if target is not None:
@@ -173,7 +183,7 @@ class OptimizationWorker(QObject):
 
         try:
             result = minimize(
-                _exact_cost, x0=x0, args=(config.beta,), method=config.optimizer,
+                cost_fn.cost_function, x0=x0, args=(config.beta,), method=config.optimizer,
                 options={'maxiter': config.iterations}, callback=callback,
             )
             final_params = result.x
@@ -187,8 +197,8 @@ class OptimizationWorker(QObject):
             return
 
         final_circuit = TFDCircuit(*final_params)
-        rho_final = partial_trace(final_circuit.get_state_vector(), [2, 3]).data
-        final_cost = float(_exact_cost(final_params, config.beta))
+        final_cost = float(cost_fn.cost_function(final_params, config.beta))
+        rho_final = cost_fn.tomography_history[-1]
 
         # How good the prepared state actually is, not just how low the
         # (engineered, proxy) cost got: fidelity against the true Gibbs
@@ -589,6 +599,13 @@ class ExperimentWindow(QWidget):
                                       markeredgewidth=1.2)
         self._loss_fill = None
         style_axes(ax, title="Loss minimization", xlabel="Iteration", ylabel="Cost  C(β)")
+        self._loss_bound = None
+        if self.config is not None:
+            self._loss_bound = CostFunction.cost_lower_bound(self.config.beta)
+            ax.axhline(self._loss_bound, color=Colors.GOOD, linestyle="--", linewidth=1.8,
+                       label=f"Lower bound = {self._loss_bound:.3f}")
+            ax.legend(loc="upper right", fontsize=8, facecolor=Colors.BG_3,
+                      edgecolor=Colors.BORDER, labelcolor=Colors.TEXT_DIM)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         self.loss_canvas.draw()
 
@@ -603,7 +620,8 @@ class ExperimentWindow(QWidget):
             self.loss_x, self.loss_y, min(self.loss_y),
             color=Colors.ACCENT, alpha=0.12, linewidth=0)
         self._loss_ax.set_xlim(*_nice_limits(0, max(self.loss_x), integer=True))
-        self._loss_ax.set_ylim(*_nice_limits(min(self.loss_y), max(self.loss_y)))
+        lo = min(self.loss_y) if self._loss_bound is None else min(min(self.loss_y), self._loss_bound)
+        self._loss_ax.set_ylim(*_nice_limits(lo, max(self.loss_y)))
         self.loss_canvas.draw_idle()
 
     def init_fidelity_plot(self):

@@ -12,7 +12,7 @@ from qi_utilities.device_simulation.simulators import NoisySimulator
 
 H_AA = default_subsystem_hamiltonian()
 
-betas = [0.00000001, 1, 5] 
+betas = [0.00000001, 0.5, 1, 5] 
 
 for beta in betas:
     gibbs = GibbsState(H_AA)
