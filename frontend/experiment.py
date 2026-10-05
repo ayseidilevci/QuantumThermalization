@@ -115,6 +115,7 @@ class OptimizationWorker(QObject):
     rho_progress = Signal(object)
     finished = Signal(object)
     log = Signal(str)
+    step = Signal(float)
 
     def __init__(self, manager, config: SessionConfig):
         super().__init__()
@@ -129,6 +130,8 @@ class OptimizationWorker(QObject):
         config = self.config
         x0 = np.array([config.gamma1, config.gamma2, config.alpha1, config.alpha2])
         iteration = [0]
+        betas = [b for b in (1e-8, 0.5, 1, 5) if b < config.beta] + [config.beta]
+        current_beta = [betas[0]]
 
         # Computed once up front rather than per-iteration or only at the
         # end: the true Gibbs state depends only on beta, not on the
@@ -143,7 +146,7 @@ class OptimizationWorker(QObject):
 
         cost_fn = CostFunction(
             varsigma=1.57,
-            backend=NoisySimulator("Starmon-7", ideal_simulation=False),
+            backend=NoisySimulator("Starmon-7", ideal_simulation=True),
         )
 
         # The live density-matrix preview is by far the most expensive thing
@@ -165,15 +168,17 @@ class OptimizationWorker(QObject):
             if self._abort:
                 raise _Aborted()
             iteration[0] += 1
-            cost = cost_fn.cost_history[-1]
+            bound = CostFunction.cost_lower_bound(current_beta[0])
+            cost = (cost_fn.cost_history[-1] - bound) / abs(bound)
             self.progress.emit(iteration[0], float(cost))
             try:
                 rho_a = cost_fn.tomography_history[-1]
                 if iteration[0] % rho_every == 0:
                     self.rho_progress.emit(rho_a)
-                if target is not None:
-                    fid = state_fidelity(DensityMatrix(rho_a), target, validate=False)
-                    self.fidelity_progress.emit(iteration[0], float(fid))
+                tgt = DensityMatrix(
+                    GibbsState(default_subsystem_hamiltonian()).gibbs_density_matrix(current_beta[0]))
+                fid = state_fidelity(DensityMatrix(rho_a), tgt, validate=False)
+                self.fidelity_progress.emit(iteration[0], float(fid))
             except Exception:
                 pass  # a live preview glitch shouldn't kill the optimization
             time.sleep(_STEP_DELAY_SECONDS)
@@ -182,10 +187,15 @@ class OptimizationWorker(QObject):
             f"Starting optimization  |  beta={config.beta}  optimizer={config.optimizer}")
 
         try:
-            result = minimize(
-                cost_fn.cost_function, x0=x0, args=(config.beta,), method=config.optimizer,
-                options={'maxiter': config.iterations}, callback=callback,
-            )
+            for b in betas:
+                current_beta[0] = b
+                self.step.emit(b)
+                self.log.emit(f"Optimizing at beta={b}")
+                result = minimize(
+                    cost_fn.cost_function, x0=x0, args=(b,), method=config.optimizer,
+                    options={'maxiter': config.iterations}, callback=callback,
+                )
+                x0 = result.x
             final_params = result.x
         except _Aborted:
             self.log.emit("Aborted.")
@@ -494,6 +504,7 @@ class ExperimentWindow(QWidget):
         self.worker.log.connect(self._on_log)
         self.worker.finished.connect(self._on_finished)
         self.worker.finished.connect(self.thread.quit)
+        self.worker.step.connect(self._on_step)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.finished.connect(self._on_thread_finished)
 
@@ -552,6 +563,13 @@ class ExperimentWindow(QWidget):
     def _on_log(self, message: str):
         self.status_log.appendPlainText(message)
 
+    def _on_step(self, beta: float):
+        for ax, xs in ((self._loss_ax, self.loss_x), (self._fidelity_ax, self.fidelity_x)):
+            x = (xs[-1] + 0.5) if xs else 0
+            ax.axvline(x, color=Colors.TEXT_MUTED, linestyle=":", linewidth=1.2)
+            ax.text(x, 1.0, f" β={beta:g}", transform=ax.get_xaxis_transform(),
+                    color=Colors.TEXT_DIM, fontsize=8, va="top")
+
     def _on_finished(self, result: dict):
         self.stop_btn.setEnabled(False)
         self.restart_btn.setEnabled(True)  # retry allowed whether this run succeeded, failed, or was stopped
@@ -598,14 +616,11 @@ class ExperimentWindow(QWidget):
                                       markersize=6, markeredgecolor=Colors.BG_3,
                                       markeredgewidth=1.2)
         self._loss_fill = None
-        style_axes(ax, title="Loss minimization", xlabel="Iteration", ylabel="Cost  C(β)")
-        self._loss_bound = None
-        if self.config is not None:
-            self._loss_bound = CostFunction.cost_lower_bound(self.config.beta)
-            ax.axhline(self._loss_bound, color=Colors.GOOD, linestyle="--", linewidth=1.8,
-                       label=f"Lower bound = {self._loss_bound:.3f}")
-            ax.legend(loc="upper right", fontsize=8, facecolor=Colors.BG_3,
-                      edgecolor=Colors.BORDER, labelcolor=Colors.TEXT_DIM)
+        style_axes(ax, title="Loss minimization", xlabel="Iteration", ylabel="Relative gap to lower bound")
+        self._loss_bound = 0.0
+        ax.axhline(0.0, color=Colors.GOOD, linestyle="--", linewidth=1.8, label="Lower bound")
+        ax.legend(loc="upper right", fontsize=8, facecolor=Colors.BG_3,
+                  edgecolor=Colors.BORDER, labelcolor=Colors.TEXT_DIM)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         self.loss_canvas.draw()
 
