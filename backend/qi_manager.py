@@ -8,6 +8,8 @@ from qiskit_quantuminspire.qi_provider import QIProvider
 
 from qi_utilities.utility_functions.data_handling import StoreProjectRecord, RetrieveProjectRecord
 
+from backend import starmon7
+
 
 @dataclass
 class BackendInfo:
@@ -15,6 +17,16 @@ class BackendInfo:
     name: str
     id: int
     status: Any
+    # True for a device emulated on this machine (Starmon-7) rather than
+    # served by the live QI API.
+    local: bool = False
+
+
+def _is_live_emulator(name: str) -> bool:
+    """The QI API's own simulators ("QX emulator", "Ry emulator") — not
+    offered in the GUI; Starmon-7 (local emulation) replaces them."""
+    lowered = name.lower()
+    return "emulator" in lowered or "simulator" in lowered
 
 
 # The live API reports a finer-grained status (see
@@ -48,7 +60,7 @@ class QuantumInspireManager:
         self.userID = None
         self.login_code = None
 
-        self.STANDARD_BACKEND = "Ry emulator"
+        self.STANDARD_BACKEND = starmon7.NAME
 
     def login(
         self,
@@ -191,13 +203,18 @@ class QuantumInspireManager:
             return False
 
     def set_provider(self):
+        # Starmon-7 is emulated locally, so it's listed (and usable) even if
+        # the live API can't be reached below.
+        self.backends = [BackendInfo(
+            backend=None, name=starmon7.NAME, id=-1, status="idle", local=True)]
+
         print("Connecting to Quantum Inspire...")
 
         self.provider = QIProvider()
 
-        self.backends = []
-
         for backend in self.provider.backends():
+            if _is_live_emulator(backend.name):
+                continue
             backend_info = BackendInfo(
                 backend=backend,
                 name=backend.name,
@@ -242,13 +259,19 @@ class QuantumInspireManager:
         print(backend)
 
         try:
-            job = backend.run(circuit)
+            if starmon7.is_starmon7(getattr(backend, "name", None)):
+                circuit = starmon7.quantize_rotations(circuit)
+                job = backend.run(circuit, shots=backend.options.shots)
+            else:
+                job = backend.run(circuit)
 
             print("\nJob submitted successfully.")
-            print("Job ID:", job.circuits_run_data[0].job_id)
 
             print("\nWaiting for results...")
             results = job.result()
+
+            # A local SimulatorJob only fills circuits_run_data in result().
+            print("Job ID:", job.circuits_run_data[0].job_id)
 
             print("\nResults:")
             print(results)
@@ -269,6 +292,9 @@ class QuantumInspireManager:
         if name is None:
             name = self.STANDARD_BACKEND
 
+        if starmon7.is_starmon7(name):
+            return starmon7.make_backend()
+
         if self.provider is None:
             self.set_provider()        
 
@@ -280,4 +306,6 @@ class QuantumInspireManager:
         return job.circuits_run_data[0].job_id
 
     def save_job(self, job):
-        StoreProjectRecord(job)
+        """Store the job record locally; returns the StoreProjectRecord,
+        whose project_dir is the experiment's folder."""
+        return StoreProjectRecord(job)

@@ -15,8 +15,9 @@ from typing import Optional
 SESSION_SCHEMA_VERSION = 1
 
 # Small local history of session files opened/saved from this app (see
-# record_recent_session / list_recent_sessions, used by
-# frontend/upload_browser.py's "previously used projects" list). Separate
+# record_recent_session / list_recent_sessions). No longer shown on the Load
+# screen — that lists experiment folders instead (backend.experiment_manager).
+# Separate
 # from qi_utilities' own job-record storage — this is just a most-recently-
 # used list of *parameter* files, not submitted-job history.
 _RECENTS_PATH = Path.home() / ".quantuminspire" / "gui_recent_sessions.json"
@@ -68,33 +69,6 @@ def record_recent_session(path) -> None:
     _write_recents_raw(entries[:_MAX_RECENTS])
 
 
-# Remembers the folder frontend/upload_browser.py's search bar last looked
-# in, so picking one sticks across app restarts instead of always starting
-# back at the home directory.
-_PREFS_PATH = Path.home() / ".quantuminspire" / "gui_prefs.json"
-
-
-def get_search_root() -> Optional[Path]:
-    """The last folder chosen for the upload browser's search, or None if
-    none has been chosen yet (caller should default to the home directory)."""
-    try:
-        with _PREFS_PATH.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        root = data.get("search_root")
-        return Path(root) if root and Path(root).is_dir() else None
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def set_search_root(path) -> None:
-    try:
-        _PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _PREFS_PATH.open("w", encoding="utf-8") as f:
-            json.dump({"search_root": str(Path(path).resolve())}, f, indent=2)
-    except OSError:
-        pass
-
-
 # The four ansatz roles a physical qubit can be assigned to — see
 # gibbs_tfd_reproduction/tfd_circuit.py for the logical-qubit convention
 # (q0=A2, q1=A1, q2=B2, q3=B1) that qubit_mapping below gets translated into.
@@ -103,7 +77,7 @@ ROLES = ("A1", "A2", "B1", "B2")
 
 @dataclass
 class SessionConfig:
-    backend_name: str = "QX emulator"
+    backend_name: str = "Starmon-7"
     beta: float = 1.0
     optimizer: str = "COBYLA"
     iterations: int = 200
@@ -143,7 +117,7 @@ class SessionConfig:
         # schema_version is unused today (only version 1 exists) but is kept
         # in the file so a future loader can branch on it.
         return cls(
-            backend_name=str(data.get("backend_name", "QX emulator")),
+            backend_name=str(data.get("backend_name", "Starmon-7")),
             beta=float(data.get("beta", 1.0)),
             optimizer=str(data.get("optimizer", "COBYLA")),
             iterations=int(data.get("iterations", 200)),

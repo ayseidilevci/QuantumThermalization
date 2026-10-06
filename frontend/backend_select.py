@@ -3,9 +3,10 @@
 One vertical (portrait) card per live backend, all in a single row that
 fills the full width and height below the header — N backends divide the
 row into N equal-width columns (see BackendSelectWindow's QGridLayout), a
-thin vertical rule separating the device columns from the simulator
-columns. Each card's chip schematic (or a placeholder for simulators — see
-device_panel.SIMULATOR_IMAGES) fills it as a background image, colored if
+thin vertical rule separating the live QI device columns from the locally
+emulated Starmon-7 (see backend/starmon7.py; the QI API's own QX/Ry
+emulators are not offered). Each card's chip schematic (or a placeholder
+for a device we ship none for) fills it as a background image, colored if
 the backend is online/busy and grayscale if it's offline
 (backend.qi_manager.classify_backend_status is the "which devices are
 available" function this reads). The name sits near the bottom and slides
@@ -24,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from frontend.colors import Colors
-from frontend.device_panel import BACKEND_IMAGES, SIMULATOR_IMAGES, _lookup_by_name
+from frontend.device_panel import BACKEND_IMAGES, _lookup_by_name
 from backend.qi_manager import classify_backend_status, STATE_OFFLINE, STATE_ONLINE
 
 MIN_CARD_SIZE = QSize(110, 180)
@@ -39,17 +40,11 @@ _STATE_DOT = {
 }
 
 
-def _is_simulator(name: str) -> bool:
-    lowered = name.lower()
-    return "emulator" in lowered or "simulator" in lowered
-
-
-def _render_card_background(name: str, simulator: bool, size: QSize) -> QPixmap:
+def _render_card_background(name: str, size: QSize) -> QPixmap:
     """A full-bleed, opaque background image for the card: the real chip
-    schematic (device) or a placeholder gradient (simulator, until real
-    artwork lands in SIMULATOR_IMAGES — see that dict's docstring)."""
-    table = SIMULATOR_IMAGES if simulator else BACKEND_IMAGES
-    path = _lookup_by_name(name, table)
+    schematic, or a placeholder gradient for a device with no entry in
+    BACKEND_IMAGES."""
+    path = _lookup_by_name(name, BACKEND_IMAGES)
 
     image = QImage(size, QImage.Format_ARGB32_Premultiplied)
     image.fill(QColor(Colors.BG_3))
@@ -74,8 +69,7 @@ def _render_card_background(name: str, simulator: bool, size: QSize) -> QPixmap:
                 painter.drawPixmap(0, 0, scaled, x, y, size.width(), size.height())
     else:
         # Placeholder: a soft accent gradient with a simple glyph, standing
-        # in until per-backend artwork exists (simulators today; any future
-        # device missing a schematic falls back the same way).
+        # in for any device missing a schematic.
         grad = QLinearGradient(0, 0, 0, size.height())
         grad.setColorAt(0.0, QColor(Colors.GRADIENT_1_START))
         grad.setColorAt(1.0, QColor(Colors.GRADIENT_1_END))
@@ -84,7 +78,7 @@ def _render_card_background(name: str, simulator: bool, size: QSize) -> QPixmap:
         glyph_font = QFont()
         glyph_font.setPointSize(48)
         painter.setFont(glyph_font)
-        painter.drawText(image.rect(), Qt.AlignCenter, "🧮" if simulator else "◆")
+        painter.drawText(image.rect(), Qt.AlignCenter, "◆")
 
     painter.end()
     return QPixmap.fromImage(image)
@@ -168,7 +162,7 @@ class BackendCard(QFrame):
             return
 
         if self._bg_size != size:
-            bg = _render_card_background(self.info.name, _is_simulator(self.info.name), size)
+            bg = _render_card_background(self.info.name, size)
             if not self._online:
                 bg = _grayscale(bg)
             self._bg_label.setPixmap(bg)
@@ -316,24 +310,24 @@ class BackendSelectWindow(QWidget):
             self._status_lbl.setText(f"Couldn't fetch the live backend list ({exc}).")
             self._status_lbl.show()
 
-        devices, simulators = [], []
+        devices, emulated = [], []
         for info in self.manager.backends:
             card = BackendCard(info)
             card.clicked.connect(self._on_card_clicked)
-            (simulators if _is_simulator(info.name) else devices).append(card)
+            (emulated if info.local else devices).append(card)
 
         # Replacing the scroll area's widget drops the previous one (and its
         # cards) along with it — simplest way to rebuild cleanly on refresh.
-        self._scroll.setWidget(self._build_grid(devices, simulators))
+        self._scroll.setWidget(self._build_grid(devices, emulated))
 
-    def _build_grid(self, devices: list, simulators: list) -> QWidget:
+    def _build_grid(self, devices: list, emulated: list) -> QWidget:
         content = QWidget()
         grid = QGridLayout(content)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(10)
 
-        if not devices and not simulators:
+        if not devices and not emulated:
             empty = QLabel("No backends found.")
             empty.setStyleSheet(f"color: {Colors.TEXT_MUTED};")
             grid.addWidget(empty, 0, 0)
@@ -347,14 +341,14 @@ class BackendSelectWindow(QWidget):
                 grid.setColumnStretch(col, 1)
                 col += 1
 
-        if devices and simulators:
+        if devices and emulated:
             grid.addWidget(_vertical_divider(), 0, col, 2, 1)
             grid.setColumnStretch(col, 0)
             col += 1
 
-        if simulators:
-            grid.addWidget(_group_title("Simulators"), 0, col, 1, len(simulators))
-            for card in simulators:
+        if emulated:
+            grid.addWidget(_group_title("Emulated device"), 0, col, 1, len(emulated))
+            for card in emulated:
                 grid.addWidget(card, 1, col)
                 grid.setColumnStretch(col, 1)
                 col += 1

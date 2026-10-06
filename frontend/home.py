@@ -80,6 +80,7 @@ class HomeWindow(QWidget):
         title_font.setBold(True)
         title.setFont(title_font)
         title.setStyleSheet(f"color: {Colors.TEXT};")
+        title.setWordWrap(True)
         main_layout.addWidget(title)
         main_layout.addSpacing(18)
 

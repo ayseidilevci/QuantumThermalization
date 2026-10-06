@@ -46,6 +46,9 @@ class LoginWindow(QWidget):
         )
 
         self.title.setAlignment(Qt.AlignCenter)
+        # Wrap rather than force the whole window to the title's one-line
+        # width (wider than a typical laptop screen at this point size).
+        self.title.setWordWrap(True)
 
         title_font = QFont()
         title_font.setPointSize(30)

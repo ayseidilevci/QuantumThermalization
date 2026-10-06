@@ -1,11 +1,12 @@
 """Setup screen's device panel: a toggle between a static chip-schematic
 image (ported from the `gui` branch's tfd_gui.py BackendImageView /
 BACKEND_IMAGES) and a new interactive qubit-topology widget that lets the
-user assign physical qubits to the TFD ansatz roles A1/A2/B1/B2.
+user pick subsystem A (A1/A2) of the TFD ansatz by dragging or clicking,
+with the mirrored subsystem B (B1/B2) filled in automatically.
 
 Real chips are fixed, published hardware, not something to re-derive at
 runtime — so for every backend we have a reference schematic for (Tuna-5,
-Tuna-9, Tuna-17), both the on-screen node *coordinates* and the real
+Tuna-9, Tuna-17, Starmon-7), both the on-screen node *coordinates* and the real
 *connectivity* are hardcoded directly in KNOWN_BACKEND_TOPOLOGY below,
 read straight off the schematics in Appdata/Img/, rather than parsed from
 the SVG at runtime or fetched from the live API. (An earlier version tried
@@ -14,7 +15,7 @@ generic graph-layout algorithm for anything else — both were more clever
 than they needed to be and each introduced its own bugs. Direct, boring
 data wins here.)
 
-Only a backend that ISN'T one of the three known chips (an unfamiliar/live
+Only a backend that ISN'T one of the known chips (an unfamiliar/live
 backend name we don't ship a schematic for) falls back to querying the live
 QIBackend's own coupling map for connectivity (see backend_topology) and a
 plain row-major grid for positions (see simple_grid_layout) — still no
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QGraphicsLineItem, QGraphicsSimpleTextItem,
 )
 
+from backend import starmon7
 from frontend.colors import Colors
 
 ROLES = ("A1", "A2", "B1", "B2")
@@ -60,14 +62,8 @@ BACKEND_IMAGES = {
     "tuna5": DATA_DIR / "1766393003-tuna-5_schematic.svg",
     "tuna9": DATA_DIR / "1765992515-tuna9logo_v1.webp",
     "tuna17": DATA_DIR / "1772648307-tuna-17_schematic-svg.svg",
+    "starmon7": DATA_DIR / "starmon-7_schematic.svg",
 }
-
-# Simulator backends (e.g. "Ry emulator", "QX emulator") have no physical
-# chip, so no schematic exists to ship yet. Empty for now — the
-# backend-selection cards (frontend/backend_select.py) fall back to a
-# placeholder for any name with no entry here. Add entries the same fuzzy
-# way as BACKEND_IMAGES once artwork exists; no code change needed.
-SIMULATOR_IMAGES: dict[str, Path] = {}
 
 # Hardcoded, real per-chip topology: on-screen coordinates (matching each
 # schematic in Appdata/Img/, y increasing downward same as the images) and
@@ -78,6 +74,8 @@ SIMULATOR_IMAGES: dict[str, Path] = {}
 # Tuna-5: an X — hub qubit 2 coupled to each of the 4 others.
 # Tuna-9 / Tuna-17: a diamond/checkerboard lattice — every qubit couples to
 # its diagonal neighbors one lattice-step away (see the schematics).
+# Starmon-7: two rhombi (0-2-5-3 and 1-3-6-4) sharing the central qubit 3;
+# edges come from backend/starmon7.py.
 KNOWN_BACKEND_TOPOLOGY = {
     "tuna5": {
         "coords": {
@@ -125,6 +123,14 @@ KNOWN_BACKEND_TOPOLOGY = {
             (10, 13), (11, 13), (11, 14), (12, 14), (12, 15),
             (14, 16), (15, 16),
         ],
+    },
+    "starmon7": {
+        "coords": {
+            0: (-80, -80), 1: (80, -80),
+            2: (-160, 0), 3: (0, 0), 4: (160, 0),
+            5: (-80, 80), 6: (80, 80),
+        },
+        "edges": starmon7.EDGES,
     },
 }
 
@@ -257,13 +263,38 @@ def backend_topology(qi_backend):
 _NODE_RADIUS = 22.0
 
 
+def find_mirror_pair(a1: int, a2: int, edges: set):
+    """Subsystem B for a chosen subsystem A: qubits (B1, B2), distinct from
+    A1/A2, with A1–B1, A2–B2 and B1–B2 all coupled — the mirrored half the
+    TFD ansatz needs. Returns None if the device has no such pair. If
+    several exist, the lowest-numbered one is taken, so the same A always
+    gives the same B."""
+    def neighbors(q):
+        return sorted(next(iter(e - {q})) for e in edges if q in e)
+
+    for b1 in neighbors(a1):
+        if b1 in (a1, a2):
+            continue
+        for b2 in neighbors(a2):
+            if b2 in (a1, a2, b1):
+                continue
+            if frozenset((b1, b2)) in edges:
+                return b1, b2
+    return None
+
+
 class QubitTopologyWidget(QGraphicsView):
-    """Click qubits in role order A1 -> A2 -> B1 -> B2 to assign them;
-    click an assigned qubit again to clear just that role.
+    """The user picks subsystem A only; subsystem B is filled in
+    automatically (see find_mirror_pair). Two ways to pick A:
+
+    - drag: press on a qubit (A1), drag a line to a coupled qubit (A2) and
+      release;
+    - click: click A1, then A2, one by one (clicking A1 again un-picks it;
+      clicking any qubit once A is complete starts a new pick from there).
 
     Emits `mapping_changed(dict)` on every change (role -> physical qubit
-    index; incomplete/cleared selections emit {}), and `status_changed(str)`
-    with the current inline hint/validation text.
+    index; incomplete/impossible selections emit {}), and
+    `status_changed(str)` with the current inline hint/validation text.
     """
 
     mapping_changed = Signal(dict)
@@ -281,8 +312,13 @@ class QubitTopologyWidget(QGraphicsView):
         self._edges = set()
         self._coords = {}
         self._assignment = {}          # role -> qubit index
+        self._problem = None           # why the picked A has no valid B, if so
         self._node_items = {}          # qubit index -> QGraphicsEllipseItem
         self._label_items = {}         # qubit index -> QGraphicsSimpleTextItem (role badge)
+
+        self._drag_from = None         # qubit a press started on
+        self._drag_line = None         # rubber-band line while dragging
+        self._dragging = False         # moved off the start qubit since press
 
     # ---- public API --------------------------------------------------
     def set_topology(self, num_qubits: int, edges: set, coords: dict = None):
@@ -290,6 +326,7 @@ class QubitTopologyWidget(QGraphicsView):
         self._edges = edges
         self._coords = coords if coords else simple_grid_layout(num_qubits)
         self._assignment = {}
+        self._problem = None
         self._redraw_scene()
         self._emit_state()
 
@@ -309,16 +346,58 @@ class QubitTopologyWidget(QGraphicsView):
             valid[role] = qubit
             used_qubits.add(qubit)
         self._assignment = valid
+        self._problem = None
         self._redraw_scene()
         self._emit_state()
 
     # ---- interaction ---------------------------------------------------
+    # A press on a qubit starts a potential drag. Releasing on a different
+    # qubit picks A1 (start) -> A2 (end); releasing on the same qubit counts
+    # as a click (see _click_qubit).
     def mousePressEvent(self, event):
-        scene_pos = self.mapToScene(event.pos())
-        qubit = self._node_at(scene_pos)
-        if qubit is not None:
-            self._toggle_qubit(qubit)
+        if event.button() == Qt.LeftButton:
+            self._drag_from = self._node_at(self.mapToScene(event.pos()))
+            self._dragging = False
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_from is not None:
+            scene_pos = self.mapToScene(event.pos())
+            over = self._node_at(scene_pos)
+            if over != self._drag_from:
+                self._dragging = True
+            if self._dragging:
+                # Snap the line's end to a qubit when hovering one.
+                end = QPointF(*self._coords[over]) if over is not None else scene_pos
+                self._show_drag_line(end)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._drag_from is not None:
+            start, end = self._drag_from, self._node_at(self.mapToScene(event.pos()))
+            self._drag_from = None
+            self._hide_drag_line()
+            if end == start and not self._dragging:
+                self._click_qubit(start)
+            elif end is not None and end != start:
+                self._pick_subsystem_a(start, end)
+            # Released on empty space: drag cancelled, nothing changes.
+            self._dragging = False
+        super().mouseReleaseEvent(event)
+
+    def _show_drag_line(self, end: QPointF):
+        if self._drag_line is None:
+            self._drag_line = QGraphicsLineItem()
+            self._drag_line.setPen(QPen(QColor(Colors.ACCENT), 3.0, Qt.DashLine, Qt.RoundCap))
+            self._drag_line.setZValue(3)
+            self.scene().addItem(self._drag_line)
+        x, y = self._coords[self._drag_from]
+        self._drag_line.setLine(x, y, end.x(), end.y())
+
+    def _hide_drag_line(self):
+        if self._drag_line is not None:
+            self.scene().removeItem(self._drag_line)
+            self._drag_line = None
 
     def _node_at(self, scene_pos: QPointF):
         for idx, (x, y) in self._coords.items():
@@ -326,19 +405,36 @@ class QubitTopologyWidget(QGraphicsView):
                 return idx
         return None
 
-    def _toggle_qubit(self, qubit: int):
-        assigned_role = next((r for r, q in self._assignment.items() if q == qubit), None)
-        if assigned_role is not None:
-            del self._assignment[assigned_role]
+    def _click_qubit(self, qubit: int):
+        a1, a2 = self._assignment.get("A1"), self._assignment.get("A2")
+        if a1 is None or a2 is not None:
+            # Nothing picked yet, or A already complete: start over here.
+            self._assignment = {"A1": qubit}
+            self._problem = None
+        elif qubit == a1:
+            self._assignment = {}
+            self._problem = None
         else:
-            free_roles = [r for r in ROLES if r not in self._assignment]
-            if not free_roles:
-                self.status_changed.emit(
-                    "All roles assigned — click an assigned qubit to change it.")
-                return
-            if qubit in self._assignment.values():
-                return
-            self._assignment[free_roles[0]] = qubit
+            self._pick_subsystem_a(a1, qubit)
+            return
+        self._redraw_scene()
+        self._emit_state()
+
+    def _pick_subsystem_a(self, a1: int, a2: int):
+        """Set A1/A2 and fill in B automatically, or record why that A
+        can't work on this device."""
+        self._assignment = {"A1": a1, "A2": a2}
+        self._problem = None
+        if frozenset((a1, a2)) not in self._edges:
+            self._problem = f"Impossible: qubits {a1} and {a2} aren't coupled, so they can't be A1–A2."
+        else:
+            pair = find_mirror_pair(a1, a2, self._edges)
+            if pair is None:
+                self._problem = (
+                    f"Impossible: no qubit pair on this device mirrors A = {a1}–{a2} "
+                    f"(needs B1 next to {a1}, B2 next to {a2}, and B1–B2 coupled).")
+            else:
+                self._assignment["B1"], self._assignment["B2"] = pair
         self._redraw_scene()
         self._emit_state()
 
@@ -346,6 +442,7 @@ class QubitTopologyWidget(QGraphicsView):
     def _redraw_scene(self):
         scene = self.scene()
         scene.clear()
+        self._drag_line = None   # deleted along with everything else
         self._node_items.clear()
         self._label_items.clear()
 
@@ -394,6 +491,20 @@ class QubitTopologyWidget(QGraphicsView):
                 line.setPen(pen)
                 scene.addItem(line)
 
+        # A picked but impossible: if A1/A2 aren't even coupled, show the
+        # requested link dashed/BAD; otherwise the A1–A2 edge itself is
+        # marked BAD (there's just no mirror B for it).
+        a1, a2 = self._assignment.get("A1"), self._assignment.get("A2")
+        if self._problem and a1 is not None and a2 is not None:
+            x1, y1 = self._coords[a1]
+            x2, y2 = self._coords[a2]
+            coupled = frozenset((a1, a2)) in self._edges
+            line = QGraphicsLineItem(x1, y1, x2, y2)
+            line.setPen(QPen(QColor(Colors.BAD), 2.6 if coupled else 2.0,
+                             Qt.SolidLine if coupled else Qt.DashLine))
+            line.setZValue(0.5)
+            scene.addItem(line)
+
         # nodes
         for idx, (x, y) in self._coords.items():
             role = next((r for r, q in self._assignment.items() if q == idx), None)
@@ -438,11 +549,26 @@ class QubitTopologyWidget(QGraphicsView):
         return missing
 
     def _emit_state(self):
-        n_left = len(ROLES) - len(self._assignment)
-        if n_left > 0:
+        if self._problem:
+            self.status_changed.emit(self._problem + " Pick another A.")
+            self.mapping_changed.emit({})
+            return
+
+        if "A1" not in self._assignment:
             self.status_changed.emit(
-                f"Select {n_left} more qubit{'s' if n_left != 1 else ''} "
-                f"({', '.join(r for r in ROLES if r not in self._assignment)}).")
+                "Pick subsystem A: drag a line from A1 to a coupled qubit (A2), "
+                "or click A1 then A2. Subsystem B is chosen automatically.")
+            self.mapping_changed.emit({})
+            return
+        if "A2" not in self._assignment:
+            self.status_changed.emit(
+                f"A1 = qubit {self._assignment['A1']}. Click a coupled qubit for A2 "
+                f"(or click A1 again to undo).")
+            self.mapping_changed.emit({})
+            return
+        if len(self._assignment) != len(ROLES):
+            # Only reachable via set_assignment() with a partial saved mapping.
+            self.status_changed.emit("Incomplete assignment — pick subsystem A again.")
             self.mapping_changed.emit({})
             return
 
@@ -452,7 +578,10 @@ class QubitTopologyWidget(QGraphicsView):
             self.status_changed.emit(f"Invalid: {pairs_txt} must be adjacent on this device.")
             self.mapping_changed.emit({})
         else:
-            self.status_changed.emit("Valid qubit assignment.")
+            a = self._assignment
+            self.status_changed.emit(
+                f"Valid: A = {a['A1']}–{a['A2']}, B = {a['B1']}–{a['B2']} (chosen "
+                f"automatically). Drag or click again to pick a different A.")
             self.mapping_changed.emit(dict(self._assignment))
 
 
@@ -503,6 +632,14 @@ class DevicePanel(QWidget):
         self._stack.addWidget(self.image_view)
         root.addWidget(stack_holder, stretch=1)
 
+        # Device specifications, shown only for backends we have them for
+        # (currently Starmon-7 — see backend/starmon7.py).
+        self.spec_label = QLabel("")
+        self.spec_label.setWordWrap(True)
+        self.spec_label.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9pt; padding: 2px;")
+        self.spec_label.hide()
+        root.addWidget(self.spec_label)
+
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet(f"color: {Colors.TEXT_DIM}; padding: 2px;")
@@ -521,7 +658,7 @@ class DevicePanel(QWidget):
 
     def set_backend(self, name: str, qi_backend=None):
         """Called by Setup whenever the backend dropdown changes. For one of
-        the three known chips (see KNOWN_BACKEND_TOPOLOGY) both the layout
+        the known chips (see KNOWN_BACKEND_TOPOLOGY) both the layout
         and the connectivity are the hardcoded real ones — no live lookup,
         no parsing, no guessing. For anything else, `qi_backend` (the live
         QIBackend, if available — see backend_topology) supplies real
@@ -530,6 +667,16 @@ class DevicePanel(QWidget):
         fully-connected 4-qubit placeholder instead.
         """
         self.image_view.set_backend(name)
+
+        if starmon7.is_starmon7(name):
+            self.spec_label.setText(
+                f"{starmon7.SPEC_SUMMARY}.\nNative gates: "
+                f"{', '.join(starmon7.NATIVE_SINGLE_QUBIT_GATES + starmon7.NATIVE_TWO_QUBIT_GATES)}"
+                f"  ·  decomposed: {', '.join(starmon7.DECOMPOSED_GATES)}"
+                f"  ·  emulated locally with calibrated noise.")
+            self.spec_label.show()
+        else:
+            self.spec_label.hide()
 
         if self._had_selection and name != self._backend_name:
             self.status_label.setText(

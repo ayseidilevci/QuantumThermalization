@@ -186,7 +186,7 @@ class SetupWindow(QWidget):
         self.tutorial = TutorialCoach(self, steps=[
             TutorialStep(
                 self._backend_name_lbl, "Backend",
-                "The device or simulator you picked on the previous screen. Use "
+                "The device you picked on the previous screen. Use "
                 "the “Change backend” button below to go back and pick a "
                 "different one."),
             TutorialStep(
@@ -205,15 +205,17 @@ class SetupWindow(QWidget):
                 "starting guess — it adjusts them itself during the run."),
             TutorialStep(
                 self.device_panel, "Device panel",
-                "Assign physical qubits to the roles A1/A2/B1/B2 in the "
-                "thermofield-double ansatz. They must be wired the way the protocol "
-                "needs: A1–A2, B1–B2, A1–B1 and A2–B2 all adjacent."),
+                "Pick subsystem A of the thermofield-double ansatz: drag a line "
+                "from one qubit (A1) to a coupled neighbour (A2), or click them "
+                "one by one. The mirrored subsystem B (B1 next to A1, B2 next to "
+                "A2, B1–B2 coupled) is chosen automatically — or you're told "
+                "it's impossible on this device."),
             TutorialStep(
                 self.start_experiment_btn, "Start Experiment",
                 "Once your qubit assignment is valid, click here to run."),
             TutorialStep(
                 self.change_backend_btn, "Change backend",
-                "Not the right device or simulator? Go back and pick a "
+                "Not the right device? Go back and pick a "
                 "different one without losing these settings."),
         ])
 

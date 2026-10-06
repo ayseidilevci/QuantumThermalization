@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="340" height="250" viewBox="0 0 340 250">
+<defs><linearGradient id="border" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#C83F85"/><stop offset="1" stop-color="#8A418A"/></linearGradient></defs>
+<rect x="3" y="3" width="334" height="244" fill="#232323" stroke="url(#border)" stroke-width="4"/>
+<polyline points="96.0,72.0 86.9,81.1 81.6,80.7 84.8,88.9 76.6,85.7 79.8,93.8 71.7,90.6 74.9,98.8 66.7,95.6 67.1,100.9 58.0,110.0" fill="none" stroke="#C83F85" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="120.0,72.0 129.1,81.1 128.7,86.4 136.9,83.2 133.7,91.4 141.8,88.2 138.6,96.3 146.8,93.1 143.6,101.3 148.9,100.9 158.0,110.0" fill="none" stroke="#C83F85" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="220.0,72.0 210.9,81.1 205.6,80.7 208.8,88.9 200.6,85.7 203.8,93.8 195.7,90.6 198.9,98.8 190.7,95.6 191.1,100.9 182.0,110.0" fill="none" stroke="#C83F85" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="244.0,72.0 253.1,81.1 252.7,86.4 260.9,83.2 257.7,91.4 265.8,88.2 262.6,96.3 270.8,93.1 267.6,101.3 272.9,100.9 282.0,110.0" fill="none" stroke="#C83F85" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="58.0,134.0 67.1,143.1 66.7,148.4 74.9,145.2 71.7,153.4 79.8,150.2 76.6,158.3 84.8,155.1 81.6,163.3 86.9,162.9 96.0,172.0" fill="none" stroke="#C83F85" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="158.0,134.0 148.9,143.1 143.6,142.7 146.8,150.9 138.6,147.7 141.8,155.8 133.7,152.6 136.9,160.8 128.7,157.6 129.1,162.9 120.0,172.0" fill="none" stroke="#C83F85" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="182.0,134.0 191.1,143.1 190.7,148.4 198.9,145.2 195.7,153.4 203.8,150.2 200.6,158.3 208.8,155.1 205.6,163.3 210.9,162.9 220.0,172.0" fill="none" stroke="#C83F85" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="282.0,134.0 272.9,143.1 267.6,142.7 270.8,150.9 262.6,147.7 265.8,155.8 257.7,152.6 260.9,160.8 252.7,157.6 253.1,162.9 244.0,172.0" fill="none" stroke="#C83F85" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="121.9,65.7 113.7,73.9 102.3,73.9 94.1,65.7 94.1,54.3 102.3,46.1 113.7,46.1 121.9,54.3" fill="#4f4f4f"/>
+<path d="M101,53 L115,67 M115,53 L101,67" stroke="#c83f85" stroke-width="4" stroke-linecap="square"/>
+<text x="108" y="38" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700" font-size="13" text-anchor="middle">Q0</text>
+<polygon points="245.9,65.7 237.7,73.9 226.3,73.9 218.1,65.7 218.1,54.3 226.3,46.1 237.7,46.1 245.9,54.3" fill="#4f4f4f"/>
+<path d="M225,53 L239,67 M239,53 L225,67" stroke="#c83f85" stroke-width="4" stroke-linecap="square"/>
+<text x="232" y="38" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700" font-size="13" text-anchor="middle">Q1</text>
+<polygon points="59.9,127.7 51.7,135.9 40.3,135.9 32.1,127.7 32.1,116.3 40.3,108.1 51.7,108.1 59.9,116.3" fill="#4f4f4f"/>
+<path d="M39,115 L53,129 M53,115 L39,129" stroke="#c83f85" stroke-width="4" stroke-linecap="square"/>
+<text x="46" y="152" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700" font-size="13" text-anchor="middle">Q2</text>
+<polygon points="183.9,127.7 175.7,135.9 164.3,135.9 156.1,127.7 156.1,116.3 164.3,108.1 175.7,108.1 183.9,116.3" fill="#4f4f4f"/>
+<path d="M163,115 L177,129 M177,115 L163,129" stroke="#c83f85" stroke-width="4" stroke-linecap="square"/>
+<text x="170" y="152" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700" font-size="13" text-anchor="middle">Q3</text>
+<polygon points="307.9,127.7 299.7,135.9 288.3,135.9 280.1,127.7 280.1,116.3 288.3,108.1 299.7,108.1 307.9,116.3" fill="#4f4f4f"/>
+<path d="M287,115 L301,129 M301,115 L287,129" stroke="#c83f85" stroke-width="4" stroke-linecap="square"/>
+<text x="294" y="152" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700" font-size="13" text-anchor="middle">Q4</text>
+<polygon points="121.9,189.7 113.7,197.9 102.3,197.9 94.1,189.7 94.1,178.3 102.3,170.1 113.7,170.1 121.9,178.3" fill="#4f4f4f"/>
+<path d="M101,177 L115,191 M115,177 L101,191" stroke="#c83f85" stroke-width="4" stroke-linecap="square"/>
+<text x="108" y="214" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700" font-size="13" text-anchor="middle">Q5</text>
+<polygon points="245.9,189.7 237.7,197.9 226.3,197.9 218.1,189.7 218.1,178.3 226.3,170.1 237.7,170.1 245.9,178.3" fill="#4f4f4f"/>
+<path d="M225,177 L239,191 M239,177 L225,191" stroke="#c83f85" stroke-width="4" stroke-linecap="square"/>
+<text x="232" y="214" fill="#ffffff" font-family="Arial, sans-serif" font-weight="700" font-size="13" text-anchor="middle">Q6</text>
+</svg>

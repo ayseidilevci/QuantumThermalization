@@ -1,5 +1,7 @@
 import sys
 
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,
@@ -18,6 +20,20 @@ from frontend.upload_browser import UploadBrowserWindow
 from frontend.backend_select import BackendSelectWindow
 from frontend.setup import SetupWindow
 from frontend.experiment import ExperimentWindow
+
+# Share of the screen's available area the window opens at (see run()).
+WINDOW_SCREEN_FRACTION = 0.85
+
+
+class _ScreenStack(QStackedWidget):
+    """The page stack, without height-for-width. Pages with word-wrapped
+    labels report a height-for-width, and Qt grows a top-level window to
+    match it — the Run screen's (~1000px, from its plot canvases' size
+    hints) pushed the window past the bottom of the screen. Pages still lay
+    out their own wrapped text; they just can't resize the window."""
+
+    def hasHeightForWidth(self) -> bool:
+        return False
 
 
 def run():
@@ -39,8 +55,6 @@ def run():
     # Main window
     window = QWidget()
 
-    window.resize(1200, 800)
-
     layout = QVBoxLayout(window)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(0)
@@ -49,7 +63,7 @@ def run():
 
     layout.addWidget(topbar)
 
-    stack = QStackedWidget()
+    stack = _ScreenStack()
 
     login = LoginWindow(manager)
     home = HomeWindow(manager)
@@ -183,13 +197,34 @@ def run():
     else:
         show_login()
 
-    window.show()
+    # Window size comes from the device's screen, not hardcoded pixels: the
+    # screen the app is launched on (where the cursor is), its available
+    # area (taskbar excluded, in DPI-scaled units), and a fixed fraction of
+    # it. If that screen can't even fit what the layouts need, just maximize.
+    screen = app.screenAt(QCursor.pos()) or app.primaryScreen()
+    available = screen.availableGeometry()
+    min_hint = window.minimumSizeHint()
 
-    screen = window.screen().availableGeometry()
+    if (min_hint.width() > available.width()
+            or min_hint.height() > available.height()):
+        window.showMaximized()
+    else:
+        window.resize(
+            max(min_hint.width(), int(available.width() * WINDOW_SCREEN_FRACTION)),
+            max(min_hint.height(), int(available.height() * WINDOW_SCREEN_FRACTION)),
+        )
+        window.show()
 
-    window.move(
-        screen.center() - window.rect().center()
-    )
+        # Center the whole frame (title bar included) on that screen. Done
+        # once the event loop runs, since the title bar's height is only
+        # known after the OS has decorated the window.
+        def center_on_screen():
+            frame = window.frameGeometry()
+            frame.moveCenter(available.center())
+            window.move(frame.topLeft())
+
+        center_on_screen()
+        QTimer.singleShot(0, center_on_screen)
 
     sys.exit(app.exec())
 

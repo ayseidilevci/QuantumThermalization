@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from scipy.optimize import minimize
 
-from qiskit import transpile
+from qiskit import QuantumCircuit, transpile
 from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity, Pauli
 
 from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
@@ -47,6 +47,8 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "gibbs_tfd_reproduc
 from gibbs_tfd_reproduction.cost_function import CostFunction
 from qi_utilities.device_simulation.simulators import NoisySimulator
 
+from backend import starmon7
+from backend.experiment_manager import write_experiment_settings
 from frontend.colors import Colors
 from frontend.session import SessionConfig
 from frontend.upload import save_session_dialog
@@ -144,9 +146,18 @@ class OptimizationWorker(QObject):
             self.log.emit(f"Couldn't compute the true Gibbs state: {exc}")
             target = None
 
+        # The cost is always evaluated on an ideal Starmon-7 simulation. When
+        # Starmon-7 is also the chosen backend, use the user's own qubit
+        # assignment; otherwise keep CostFunction's default valid layout
+        # (a mapping for another chip needn't fit Starmon-7's coupling map).
+        cost_kwargs = {}
+        if starmon7.is_starmon7(config.backend_name) and config.is_qubit_mapping_complete():
+            cost_kwargs["initial_layout"] = [
+                config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
         cost_fn = CostFunction(
             varsigma=1.57,
-            backend=NoisySimulator("Starmon-7", ideal_simulation=True),
+            backend=NoisySimulator(starmon7.NAME, ideal_simulation=True),
+            **cost_kwargs,
         )
 
         # The live density-matrix preview is by far the most expensive thing
@@ -222,18 +233,44 @@ class OptimizationWorker(QObject):
             except Exception as exc:
                 self.log.emit(f"Couldn't compute final fidelity: {exc}")
 
-        self.log.emit("Optimization complete. Submitting circuit to Quantum Inspire...")
+        local = starmon7.is_starmon7(config.backend_name)
+        self.log.emit(
+            "Optimization complete. Running circuit on the Starmon-7 emulator..." if local
+            else "Optimization complete. Submitting circuit to Quantum Inspire...")
         submitted = False
         try:
             backend = self.manager.get_backend(config.backend_name)
             initial_layout = [config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
-            transpiled = transpile(
-                final_circuit.as_qiskit_circuit(), backend, initial_layout=initial_layout)
+            qc = final_circuit.as_qiskit_circuit()
+            if local:
+                # The local emulator returns counts only for measured qubits,
+                # and rebuilds circuits with default-named registers — so
+                # measure into a plain "c" register, not measure_all()'s "meas".
+                measured = QuantumCircuit(qc.num_qubits, qc.num_qubits)
+                measured.compose(qc, inplace=True)
+                measured.measure(range(qc.num_qubits), range(qc.num_qubits))
+                qc = measured
+            transpiled = transpile(qc, backend, initial_layout=initial_layout)
             job, _results = self.manager.submit_circuit(transpiled, backend)
             submitted = job is not None
             if submitted:
                 try:
-                    self.manager.save_job(job)
+                    record = self.manager.save_job(job)
+                    # The job record has no app settings; store them (and the
+                    # optimizer's outcome) alongside it for the Load screen's
+                    # experiment history.
+                    write_experiment_settings(record.project_dir, {
+                        **config.to_json_dict(),
+                        "results": {
+                            "optimized_params": dict(zip(
+                                ("gamma1", "gamma2", "alpha1", "alpha2"),
+                                (float(p) for p in final_params))),
+                            "final_cost": final_cost,
+                            "fidelity": fidelity,
+                            "job_id": str(self.manager.get_job_id(job)),
+                        },
+                    })
+                    self.log.emit(f"Saved to {record.project_dir}")
                 except Exception as exc:
                     self.log.emit(f"Job ran but couldn't be saved locally: {exc}")
             self.log.emit("Submitted." if submitted else "Submission returned no job.")
