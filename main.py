@@ -1,6 +1,5 @@
 import sys
 
-from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -21,7 +20,8 @@ from frontend.backend_select import BackendSelectWindow
 from frontend.setup import SetupWindow
 from frontend.experiment import ExperimentWindow
 
-# Share of the screen's available area the window opens at (see run()).
+# Share of the screen's available area the window restores to when the
+# user un-maximizes it (see run()).
 WINDOW_SCREEN_FRACTION = 0.85
 
 
@@ -197,34 +197,19 @@ def run():
     else:
         show_login()
 
-    # Window size comes from the device's screen, not hardcoded pixels: the
-    # screen the app is launched on (where the cursor is), its available
-    # area (taskbar excluded, in DPI-scaled units), and a fixed fraction of
-    # it. If that screen can't even fit what the layouts need, just maximize.
+    # Open maximized on the screen the app is launched on (where the cursor
+    # is). Maximized rather than true fullscreen, so the title bar stays and
+    # the user can restore/shrink the window afterwards; the restored size
+    # is a fraction of that screen, centered on it.
     screen = app.screenAt(QCursor.pos()) or app.primaryScreen()
     available = screen.availableGeometry()
     min_hint = window.minimumSizeHint()
-
-    if (min_hint.width() > available.width()
-            or min_hint.height() > available.height()):
-        window.showMaximized()
-    else:
-        window.resize(
-            max(min_hint.width(), int(available.width() * WINDOW_SCREEN_FRACTION)),
-            max(min_hint.height(), int(available.height() * WINDOW_SCREEN_FRACTION)),
-        )
-        window.show()
-
-        # Center the whole frame (title bar included) on that screen. Done
-        # once the event loop runs, since the title bar's height is only
-        # known after the OS has decorated the window.
-        def center_on_screen():
-            frame = window.frameGeometry()
-            frame.moveCenter(available.center())
-            window.move(frame.topLeft())
-
-        center_on_screen()
-        QTimer.singleShot(0, center_on_screen)
+    restored = window.geometry()
+    restored.setWidth(max(min_hint.width(), int(available.width() * WINDOW_SCREEN_FRACTION)))
+    restored.setHeight(max(min_hint.height(), int(available.height() * WINDOW_SCREEN_FRACTION)))
+    restored.moveCenter(available.center())
+    window.setGeometry(restored)
+    window.showMaximized()
 
     sys.exit(app.exec())
 

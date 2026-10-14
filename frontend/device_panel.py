@@ -333,6 +333,14 @@ class QubitTopologyWidget(QGraphicsView):
     def current_mapping(self) -> dict:
         return dict(self._assignment) if len(self._assignment) == len(ROLES) else {}
 
+    def clear_selection(self):
+        """Drop the whole role assignment (same end state as clicking A1
+        twice)."""
+        self._assignment = {}
+        self._problem = None
+        self._redraw_scene()
+        self._emit_state()
+
     def set_assignment(self, mapping: dict):
         """Restore a role -> qubit assignment directly (used when loading a
         saved session), skipping any role/qubit that no longer fits this
@@ -622,6 +630,21 @@ class DevicePanel(QWidget):
         toggle_row.addWidget(self.image_btn)
         toggle_row.addWidget(self.interactive_btn)
         toggle_row.addStretch()
+
+        self.reset_btn = QPushButton("🔄  Reset selection")
+        self.reset_btn.setCursor(Qt.PointingHandCursor)
+        self.reset_btn.setMinimumHeight(36)
+        self.reset_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(254,138,39,0.15); color: {Colors.WARN};
+                border: 2px solid {Colors.WARN}; border-radius: 10px;
+                padding: 6px 18px; font-size: 11pt; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {Colors.WARN}; color: #06101C; }}
+            QPushButton:pressed {{ background: #E07415; color: #06101C; }}
+        """)
+        self.reset_btn.clicked.connect(self.clear_selection)
+        toggle_row.addWidget(self.reset_btn)
         root.addLayout(toggle_row)
 
         stack_holder = QWidget()
@@ -655,6 +678,10 @@ class DevicePanel(QWidget):
         self.image_btn.setChecked(mode == "image")
         self.interactive_btn.setChecked(mode == "interactive")
         self._stack.setCurrentWidget(self.image_view if mode == "image" else self.topology_view)
+        self.reset_btn.setVisible(mode == "interactive")
+
+    def clear_selection(self):
+        self.topology_view.clear_selection()
 
     def set_backend(self, name: str, qi_backend=None):
         """Called by Setup whenever the backend dropdown changes. For one of

@@ -30,7 +30,7 @@ from matplotlib.ticker import MaxNLocator
 from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QLabel, QPushButton,
     QPlainTextEdit, QFileDialog, QMessageBox,
 )
 
@@ -69,6 +69,23 @@ _LOGICAL_ROLE_ORDER = ("A2", "A1", "B2", "B1")
 # actually watchable during a demo instead of just snapping to the final
 # result. Tune down/remove for real runs where speed matters more.
 _STEP_DELAY_SECONDS = 0.06
+
+# Phase colormap for the density-matrix bars: a light/dark ramp in the app's
+# blue instead of a rainbow. Dark at ±π, light at 0 — cyclic, so -π and π
+# (the same phase) get the same color, and for the real matrices here
+# positive entries read light and negative ones dark.
+_PHASE_DARK = "#2B5A80"
+_PHASE_LIGHT = "#D6F1FB"
+_PHASE_CMAP = mcolors.LinearSegmentedColormap.from_list(
+    "phase_light_dark", [_PHASE_DARK, _PHASE_LIGHT, _PHASE_DARK])
+
+
+def _legend_above(ax, ncol=2):
+    """Legend in a strip above the plot area, so it never sits on the
+    curve, the β markers, or the tick numbers."""
+    ax.legend(loc="lower left", bbox_to_anchor=(0.0, 1.01), ncol=ncol,
+              fontsize=8, frameon=False, labelcolor=Colors.TEXT_DIM,
+              borderaxespad=0.0, handlelength=1.8)
 
 
 def _nice_limits(lo, hi, nbins=5, integer=False):
@@ -303,7 +320,7 @@ class ExperimentWindow(QWidget):
         self._last_rho = None
         self._last_params = None
         self._target_rho = None
-        self._density_view = "observed"
+        self._ideal_zmax = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -435,37 +452,25 @@ class ExperimentWindow(QWidget):
 
         self.loss_canvas = MplCanvas()
         self.fidelity_canvas = MplCanvas()
+        self.ideal_rho_canvas = MplCanvas(height=4.0, use_layout=False)
         self.rho_canvas = MplCanvas(height=4.0, use_layout=False)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(10)
-        top_row.addWidget(panel("Fidelity to target (live)", self.fidelity_canvas,
-                                 on_save=self._save_fidelity), stretch=1)
-
-        rho_panel = panel("Reduced density matrix ρ_A", self.rho_canvas,
-                           on_save=self._save_density)
-        self.density_toggle_btn = QPushButton("👁  Show ideal result")
-        self.density_toggle_btn.setCheckable(True)
-        self.density_toggle_btn.setEnabled(False)
-        self.density_toggle_btn.setCursor(Qt.PointingHandCursor)
-        self.density_toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {Colors.TEXT_DIM};
-                border: 1px solid {Colors.BORDER}; border-radius: 8px;
-                padding: 6px; font-weight: 600;
-            }}
-            QPushButton:hover:enabled {{ color: {Colors.TEXT}; border-color: {Colors.ACCENT}; }}
-            QPushButton:checked {{ color: {Colors.ACCENT}; border-color: {Colors.ACCENT}; }}
-            QPushButton:disabled {{ color: {Colors.TEXT_MUTED}; }}
-        """)
-        self.density_toggle_btn.toggled.connect(self._on_toggle_density_view)
-        rho_panel.layout().addWidget(self.density_toggle_btn)
-        top_row.addWidget(rho_panel, stretch=1)
-
-        main_layout.addLayout(top_row, stretch=1)
-
-        main_layout.addWidget(panel("Loss minimization (live)", self.loss_canvas,
-                                    on_save=self._save_loss), stretch=1)
+        # 2x2 results grid: live curves on top, ideal vs. observed ρ_A
+        # side by side underneath.
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        grid.addWidget(panel("Fidelity to target (live)", self.fidelity_canvas,
+                             on_save=self._save_fidelity), 0, 0)
+        grid.addWidget(panel("Cost function (live)", self.loss_canvas,
+                             on_save=self._save_loss), 0, 1)
+        grid.addWidget(panel("Ideal density matrix (true Gibbs state)", self.ideal_rho_canvas,
+                             on_save=self._save_ideal_density), 1, 0)
+        grid.addWidget(panel("Measured density matrix (tomography)", self.rho_canvas,
+                             on_save=self._save_density), 1, 1)
+        for i in (0, 1):
+            grid.setRowStretch(i, 1)
+            grid.setColumnStretch(i, 1)
+        main_layout.addLayout(grid, stretch=1)
 
         circuit_toggle = QPushButton("▸  Circuit diagram")
         circuit_toggle.setCheckable(True)
@@ -494,6 +499,7 @@ class ExperimentWindow(QWidget):
         self.init_loss_plot()
         self.init_fidelity_plot()
         self._draw_empty_density()
+        self._draw_ideal_density()
 
     # -----------------------------------------------------
     # Public API (driven by main.py)
@@ -516,19 +522,14 @@ class ExperimentWindow(QWidget):
         self._draw_circuit_for(
             [config.gamma1, config.gamma2, config.alpha1, config.alpha2])
 
-        self._density_view = "observed"
-        self.density_toggle_btn.blockSignals(True)
-        self.density_toggle_btn.setChecked(False)
-        self.density_toggle_btn.blockSignals(False)
-        self.density_toggle_btn.setText("👁  Show ideal result")
-        self.density_toggle_btn.setEnabled(False)
         try:
             self._target_rho = DensityMatrix(
                 GibbsState(default_subsystem_hamiltonian()).gibbs_density_matrix(config.beta)).data
         except Exception as exc:
             self._on_log(f"Couldn't compute the true Gibbs state: {exc}")
             self._target_rho = None
-        self.density_toggle_btn.setEnabled(self._target_rho is not None)
+        self._last_rho = None
+        self._draw_ideal_density()
         self._draw_empty_density()
 
         self.thread = QThread()
@@ -604,8 +605,17 @@ class ExperimentWindow(QWidget):
         for ax, xs in ((self._loss_ax, self.loss_x), (self._fidelity_ax, self.fidelity_x)):
             x = (xs[-1] + 0.5) if xs else 0
             ax.axvline(x, color=Colors.TEXT_MUTED, linestyle=":", linewidth=1.2)
-            ax.text(x, 1.0, f" β={beta:g}", transform=ax.get_xaxis_transform(),
-                    color=Colors.TEXT_DIM, fontsize=8, va="top")
+            # Label sits just right of the line (inside the plot), so the
+            # first one at x=0 doesn't land on the y-axis tick numbers.
+            mantissa, _, exponent = f"{beta:g}".partition("e")
+            beta_tex = (rf"10^{{{int(exponent)}}}" if mantissa == "1" else
+                        rf"{mantissa}\times10^{{{int(exponent)}}}") if exponent else mantissa
+            ax.annotate(rf"$\beta={beta_tex}$",xy=(x, 0.97), xycoords=ax.get_xaxis_transform(),
+                        xytext=(3, 0), textcoords="offset points",
+                        color=Colors.TEXT_DIM, fontsize=7.5, rotation=90,
+                        ha="left", va="top",
+                        bbox=dict(boxstyle="round,pad=0.15", facecolor=Colors.BG_3,
+                                  edgecolor="none", alpha=0.85))
 
     def _on_finished(self, result: dict):
         self.stop_btn.setEnabled(False)
@@ -653,11 +663,13 @@ class ExperimentWindow(QWidget):
                                       markersize=6, markeredgecolor=Colors.BG_3,
                                       markeredgewidth=1.2)
         self._loss_fill = None
-        style_axes(ax, title="Loss minimization", xlabel="Iteration", ylabel="Relative gap to lower bound")
+        self._loss_line.set_label("Cost")
+        # No in-plot title: the panel card already says "Cost function", and
+        # the legend strip goes where a title would be.
+        style_axes(ax, xlabel="Iteration", ylabel="Relative gap to lower bound")
         self._loss_bound = 0.0
         ax.axhline(0.0, color=Colors.GOOD, linestyle="--", linewidth=1.8, label="Lower bound")
-        ax.legend(loc="upper right", fontsize=8, facecolor=Colors.BG_3,
-                  edgecolor=Colors.BORDER, labelcolor=Colors.TEXT_DIM)
+        _legend_above(ax)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         self.loss_canvas.draw()
 
@@ -691,11 +703,10 @@ class ExperimentWindow(QWidget):
         (self._fidelity_head,) = ax.plot([], [], "o", color=Colors.ACCENT_HOVER,
                                           markersize=6, markeredgecolor=Colors.BG_3,
                                           markeredgewidth=1.2, zorder=2)
-        style_axes(ax, title="Fidelity to target", xlabel="Iteration", ylabel="Fidelity")
+        style_axes(ax, xlabel="Iteration", ylabel="Fidelity")
         ax.set_ylim(0, 1.05)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.legend(loc="lower right", fontsize=8, facecolor=Colors.BG_3,
-                  edgecolor=Colors.BORDER, labelcolor=Colors.TEXT_DIM)
+        _legend_above(ax)
         self.fidelity_canvas.draw()
 
     def _on_fidelity_progress(self, it: int, fid: float):
@@ -715,21 +726,41 @@ class ExperimentWindow(QWidget):
         self.fidelity_canvas.draw_idle()
 
     def _draw_empty_density(self):
-        self._draw_density(np.eye(4, dtype=complex) / 4)
+        self._render_density(self.rho_canvas, np.eye(4, dtype=complex) / 4,
+                             title=r"$\rho_A$  (waiting for first estimate)", zmax=self._density_zmax())
 
     def _draw_density(self, rho: np.ndarray):
         """Connected to the worker's live rho_progress and called from
-        _on_finished — always remembers the latest observed matrix, but
-        only redraws the canvas if that's the view currently selected (see
-        density_toggle_btn / _on_toggle_density_view)."""
+        _on_finished with the converged result."""
         self._last_rho = rho
-        if self._density_view == "observed":
-            self._render_density(rho, title="Observed (live)")
+        zmax = self._density_zmax()
+        if zmax != self._ideal_zmax:
+            # Keep both 3D plots on the same |ρ| scale so they compare
+            # bar-for-bar.
+            self._draw_ideal_density()
+        self._render_density(self.rho_canvas, rho, title=r"$\rho_A$  (observed, live)", zmax=zmax)
 
-    def _render_density(self, rho: np.ndarray, title: str):
-        fig = self.rho_canvas.fig
+    def _draw_ideal_density(self):
+        self._ideal_zmax = self._density_zmax()
+        if self._target_rho is None:
+            rho, title = np.eye(4, dtype=complex) / 4, r"$\rho_A^{\mathrm{ideal}}$  (unavailable)"
+        else:
+            rho, title = self._target_rho, r"$\rho_A^{\mathrm{ideal}} = e^{-\beta H} / Z$"
+        self._render_density(self.ideal_rho_canvas, rho, title=title, zmax=self._ideal_zmax)
+
+    def _density_zmax(self) -> float:
+        """Shared z-axis top for the ideal and observed plots: the larger
+        matrix's biggest |entry|, rounded up to 0.1."""
+        peak = 0.25
+        for rho in (self._target_rho, self._last_rho):
+            if rho is not None:
+                peak = max(peak, float(np.abs(rho).max()))
+        return min(1.0, np.ceil(peak * 10 - 1e-9) / 10)
+
+    def _render_density(self, canvas: MplCanvas, rho: np.ndarray, title: str, zmax: float):
+        fig = canvas.fig
         fig.clear()
-        fig.subplots_adjust(left=0.02, right=0.82, bottom=0.05, top=0.92)
+        fig.subplots_adjust(left=0.0, right=0.80, bottom=0.04, top=0.94)
         ax = fig.add_subplot(111, projection="3d")
         ax.set_facecolor(Colors.BG_3)
         for pane in (ax.xaxis, ax.yaxis, ax.zaxis):
@@ -738,7 +769,7 @@ class ExperimentWindow(QWidget):
         for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
             axis.line.set_color(Colors.GRID)
             axis.label.set_color(Colors.TEXT_DIM)
-        ax.tick_params(colors=Colors.TEXT_MUTED)
+        ax.tick_params(colors=Colors.TEXT_MUTED, labelsize=8, pad=1)
 
         n = rho.shape[0]
         xpos, ypos = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
@@ -746,39 +777,32 @@ class ExperimentWindow(QWidget):
         heights = np.abs(rho).ravel()
         phases = np.angle(rho).ravel()
         norm_phase = (phases + np.pi) / (2 * np.pi)
-        colors = cm.twilight(norm_phase)
+        colors = _PHASE_CMAP(norm_phase)
         ax.bar3d(xpos, ypos, np.zeros_like(heights), 0.7, 0.7, heights,
                   color=colors, shade=True, edgecolor=Colors.BG_1, linewidth=0.6)
         labels = ["00", "01", "10", "11"][:n]
         ax.set_xticks(np.arange(n) + 0.35); ax.set_xticklabels(labels)
         ax.set_yticks(np.arange(n) + 0.35); ax.set_yticklabels(labels)
-        ax.set_zlabel("|ρ|")
-        ax.text2D(0.02, 0.98, title, transform=ax.transAxes, fontsize=9,
-                   color=Colors.TEXT_DIM, va="top")
+        ax.set_zlim(0, zmax)
+        # Few, short z ticks so they don't run into each other or the label.
+        ax.zaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.zaxis.set_major_formatter("{x:.1f}")
+        ax.set_zlabel(r"$|\rho_{ij}|$", labelpad=2, fontsize=10)
+        ax.text2D(0.02, 0.98, title, transform=ax.transAxes, fontsize=12,
+                   color=Colors.TEXT, va="top")
         # No in-plot title via ax.set_title(): the panel() card above already
-        # headers this "Reduced density matrix ρ_A", and a 3D-axes title here
-        # doesn't respect the panel's width (it overflows past the canvas
-        # edges once the panel gets narrow) — the small text2D label above
-        # just distinguishes the two toggle states without that risk.
+        # headers it, and a 3D-axes title doesn't respect the panel's width
+        # (it overflows past the canvas edges once the panel gets narrow).
 
-        sm = cm.ScalarMappable(cmap=cm.twilight, norm=mcolors.Normalize(vmin=-np.pi, vmax=np.pi))
-        cbar = fig.colorbar(sm, ax=ax, shrink=0.55, pad=0.15, ticks=[-np.pi, 0, np.pi])
-        cbar.ax.set_yticklabels(["−π", "0", "π"], color=Colors.TEXT_DIM)
-        cbar.set_label("phase", color=Colors.TEXT_DIM, fontsize=9)
+        # Colorbar in its own fixed slot at the right edge, clear of the 3D
+        # axes' tick numbers.
+        sm = cm.ScalarMappable(cmap=_PHASE_CMAP, norm=mcolors.Normalize(vmin=-np.pi, vmax=np.pi))
+        cax = fig.add_axes([0.85, 0.22, 0.03, 0.56])
+        cbar = fig.colorbar(sm, cax=cax, ticks=[-np.pi, 0, np.pi])
+        cbar.ax.set_yticklabels(["−π", "0", "π"], color=Colors.TEXT_DIM, fontsize=8)
+        cbar.set_label("phase", color=Colors.TEXT_DIM, fontsize=8, labelpad=2)
         cbar.outline.set_edgecolor(Colors.BORDER)
-        self.rho_canvas.draw_idle()
-
-    def _on_toggle_density_view(self, checked: bool):
-        if checked:
-            self._density_view = "ideal"
-            self.density_toggle_btn.setText("↩  Back to optimizer result")
-            rho = self._target_rho if self._target_rho is not None else np.eye(4, dtype=complex) / 4
-            self._render_density(rho, title="True Gibbs state (ideal)")
-        else:
-            self._density_view = "observed"
-            self.density_toggle_btn.setText("👁  Show ideal result")
-            rho = self._last_rho if self._last_rho is not None else np.eye(4, dtype=complex) / 4
-            self._render_density(rho, title="Observed (live)")
+        canvas.draw_idle()
 
     def _draw_circuit_for(self, params):
         qc = TFDCircuit(*params).as_qiskit_circuit()
@@ -872,20 +896,24 @@ class ExperimentWindow(QWidget):
                 w.writerows(zip(self.fidelity_x, self.fidelity_y))
 
     def _save_density(self):
-        # Save whichever matrix is currently on screen (live/observed or the
-        # toggled-in ideal target), not always the live one.
-        displayed_rho = self._target_rho if self._density_view == "ideal" else self._last_rho
+        self._save_density_matrix(self._last_rho, self.rho_canvas, "density_matrix.npy")
+
+    def _save_ideal_density(self):
+        self._save_density_matrix(self._target_rho, self.ideal_rho_canvas,
+                                  "ideal_density_matrix.npy")
+
+    def _save_density_matrix(self, displayed_rho, canvas, default_name):
         if displayed_rho is None:
             QMessageBox.information(self, "Nothing to save", "No density matrix yet.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save density matrix", "density_matrix.npy",
+            self, "Save density matrix", default_name,
             "NumPy array (*.npy);;CSV data (*.csv);;PNG image (*.png)")
         if not path:
             return
         lower = path.lower()
         if lower.endswith(".png"):
-            self.rho_canvas.fig.savefig(path, facecolor=self.rho_canvas.fig.get_facecolor())
+            canvas.fig.savefig(path, facecolor=canvas.fig.get_facecolor())
         elif lower.endswith(".npy"):
             np.save(path, displayed_rho)
         else:
