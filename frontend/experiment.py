@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from scipy.optimize import minimize
 
-from qiskit import QuantumCircuit, transpile
+from qiskit import QuantumCircuit, QuantumRegister, transpile
 from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity, Pauli
 
 from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
@@ -450,6 +450,30 @@ class ExperimentWindow(QWidget):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(10)
 
+        # One-line summary of the run's settings above the results grid
+        # (angles stay in the sidebar recap only).
+        params_bar = QWidget()
+        params_bar.setObjectName("paramsBar")
+        params_bar.setStyleSheet(f"""
+            #paramsBar {{
+                background: {Colors.BG_2}; border: 1px solid {Colors.BORDER};
+                border-radius: 10px;
+            }}
+            QLabel {{ background: transparent; }}
+        """)
+        params_row = QHBoxLayout(params_bar)
+        params_row.setContentsMargins(16, 8, 16, 8)
+        params_row.setSpacing(28)
+        self._param_strip_labels = {}
+        for key in ("Backend", "β", "Optimizer", "Iterations", "Qubits"):
+            lbl = QLabel()
+            lbl.setTextFormat(Qt.RichText)
+            lbl.setText(f"<span style='color:{Colors.TEXT_DIM};'>{key}</span>&nbsp;&nbsp;–")
+            self._param_strip_labels[key] = lbl
+            params_row.addWidget(lbl)
+        params_row.addStretch()
+        main_layout.addWidget(params_bar)
+
         self.loss_canvas = MplCanvas()
         self.fidelity_canvas = MplCanvas()
         self.ideal_rho_canvas = MplCanvas(height=4.0, use_layout=False)
@@ -594,9 +618,21 @@ class ExperimentWindow(QWidget):
             f"γ₁={config.gamma1:.2f}  γ₂={config.gamma2:.2f}\n"
             f"α₁={config.alpha1:.2f}  α₂={config.alpha2:.2f}")
         mapping = config.qubit_mapping or {}
-        self._recap_labels["Qubits"].setText(
-            "  ".join(f"{role}→q{mapping[role]}" for role in ("A1", "A2", "B1", "B2")
-                      if role in mapping) or "–")
+        qubits = "  ".join(f"{role}→q{mapping[role]}" for role in ("A1", "A2", "B1", "B2")
+                           if role in mapping) or "–"
+        self._recap_labels["Qubits"].setText(qubits)
+
+        strip_values = {
+            "Backend": config.backend_name,
+            "β": f"{config.beta:.2f}",
+            "Optimizer": config.optimizer,
+            "Iterations": str(config.iterations),
+            "Qubits": qubits,
+        }
+        for key, value in strip_values.items():
+            self._param_strip_labels[key].setText(
+                f"<span style='color:{Colors.TEXT_DIM};'>{key}</span>&nbsp;&nbsp;"
+                f"<b style='color:{Colors.TEXT};'>{value}</b>")
 
     def _on_log(self, message: str):
         self.status_log.appendPlainText(message)
@@ -820,11 +856,27 @@ class ExperimentWindow(QWidget):
             "creglinecolor": Colors.TEXT_MUTED,
             "gatefacecolor": Colors.ACCENT,
             "barrierfacecolor": Colors.GRID,
+            # Qiskit colors gates per name via displaycolor, which overrides
+            # gatefacecolor: same light/dark blues as the density plots —
+            # single-qubit gates light, two-qubit gates dark.
+            "displaycolor": {
+                inst.operation.name: (
+                    [_PHASE_LIGHT, "#06101C"] if inst.operation.num_qubits == 1
+                    else [_PHASE_DARK, Colors.TEXT])
+                for inst in qc.data
+            },
         }
+        # Wires labelled by role instead of q0..q3: one single-qubit register
+        # per role (Qiskit labels a size-1 register by its name alone), in
+        # TFDCircuit's logical order, drawn top-to-bottom as A1 A2 B1 B2.
+        # Only the drawing is relabelled; _last_qc (QASM export) keeps "q".
+        labelled = QuantumCircuit(*(QuantumRegister(1, role) for role in _LOGICAL_ROLE_ORDER))
+        labelled.compose(qc, inplace=True)
+        wire_order = [_LOGICAL_ROLE_ORDER.index(role) for role in ("A1", "A2", "B1", "B2")]
         try:
-            qc.draw(output="mpl", ax=ax, style=style)
+            labelled.draw(output="mpl", ax=ax, style=style, wire_order=wire_order)
         except Exception:
-            qc.draw(output="mpl", ax=ax)
+            labelled.draw(output="mpl", ax=ax)
         self.circ_canvas.draw()
 
     # -----------------------------------------------------
