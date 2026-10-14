@@ -31,8 +31,10 @@ from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QLabel, QPushButton,
-    QPlainTextEdit, QFileDialog, QMessageBox,
+    QPlainTextEdit, QFileDialog, QMessageBox, QTabWidget, QTabBar, QGroupBox,
 )
+from frontend.plots import MplCanvas, style_axes, panel, panel_card_stylesheet
+from frontend.device_panel import QubitTopologyWidget, KNOWN_BACKEND_TOPOLOGY, _lookup_by_name
 
 from scipy.optimize import minimize
 
@@ -53,7 +55,6 @@ from frontend.colors import Colors
 from frontend.session import SessionConfig
 from frontend.upload import save_session_dialog
 from frontend.plots import MplCanvas, style_axes, panel
-from frontend.device_panel import QubitTopologyWidget, KNOWN_BACKEND_TOPOLOGY, _lookup_by_name
 
 SIDEBAR_WIDTH = 300
 BOTTOM_BAR_HEIGHT = 200
@@ -322,6 +323,8 @@ class ExperimentWindow(QWidget):
         self._last_params = None
         self._target_rho = None
         self._ideal_zmax = None
+        self._graphs = {}
+        self._tab_pages = {}
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -452,8 +455,8 @@ class ExperimentWindow(QWidget):
         # Right main area
         # -------------------------------------------------
 
-        main = QWidget()
-        main_layout = QVBoxLayout(main)
+        overview = QWidget()
+        main_layout = QVBoxLayout(overview)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(10)
 
@@ -490,14 +493,21 @@ class ExperimentWindow(QWidget):
         # side by side underneath.
         grid = QGridLayout()
         grid.setSpacing(10)
-        grid.addWidget(panel("Fidelity to target (live)", self.fidelity_canvas,
-                             on_save=self._save_fidelity), 0, 0)
-        grid.addWidget(panel("Cost function (live)", self.loss_canvas,
-                             on_save=self._save_loss), 0, 1)
-        grid.addWidget(panel("Ideal density matrix (true Gibbs state)", self.ideal_rho_canvas,
-                             on_save=self._save_ideal_density), 1, 0)
-        grid.addWidget(panel("Measured density matrix (tomography)", self.rho_canvas,
-                             on_save=self._save_density), 1, 1)
+        def _card(key, title, canvas, save):
+            card = panel(title, canvas)
+            self._graphs[key] = (title, canvas, save, card)
+            return card
+
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        grid.addWidget(_card("fidelity", "Fidelity to target (live)", self.fidelity_canvas,
+                             self._save_fidelity), 0, 0)
+        grid.addWidget(_card("loss", "Cost function (live)", self.loss_canvas,
+                             self._save_loss), 0, 1)
+        grid.addWidget(_card("ideal", "Ideal density matrix (true Gibbs state)", self.ideal_rho_canvas,
+                             self._save_ideal_density), 1, 0)
+        grid.addWidget(_card("measured", "Measured density matrix (tomography)", self.rho_canvas,
+                             self._save_density), 1, 1)
         for i in (0, 1):
             grid.setRowStretch(i, 1)
             grid.setColumnStretch(i, 1)
@@ -515,8 +525,8 @@ class ExperimentWindow(QWidget):
         main_layout.addWidget(circuit_toggle)
 
         self.circ_canvas = MplCanvas(height=2.6)
-        self.circuit_card = panel("Circuit (reference)", self.circ_canvas,
-                                   on_save=self._save_circuit)
+        self.circuit_card = _card("circuit", "Circuit (reference)", self.circ_canvas,
+                                  self._save_circuit)
         self.circuit_card.hide()
         main_layout.addWidget(self.circuit_card)
 
@@ -525,7 +535,30 @@ class ExperimentWindow(QWidget):
             self.circuit_card.setVisible(checked)
         circuit_toggle.toggled.connect(_toggle_circuit)
 
-        root.addWidget(main, stretch=1)
+        self.tabs = QTabWidget()
+        self.tabs.setTabsClosable(True)
+        self.tabs.tabBar().setDrawBase(False)
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border: none; }}
+            QTabBar::tab {{
+                background: {Colors.BG_2}; color: {Colors.TEXT_DIM};
+                padding: 8px 16px; margin-right: 2px; min-width: 90px;
+                border-top-left-radius: 10px; border-top-right-radius: 10px;
+            }}
+            QTabBar::tab:selected {{
+                background: {Colors.BG_3}; color: {Colors.TEXT};
+                border-bottom: 2px solid {Colors.ACCENT};
+            }}
+            QTabBar::tab:hover:!selected {{ background: {Colors.BG_3}; }}
+        """)
+        self.tabs.addTab(overview, "Overview")
+        self.tabs.tabBar().setTabButton(0, QTabBar.RightSide, None)
+        self.tabs.tabBar().setTabButton(0, QTabBar.LeftSide, None)
+        self.tabs.currentChanged.connect(self._rehome)
+        self.tabs.tabCloseRequested.connect(self._close_tab)
+        for key in self._graphs:
+            self._make_clickable(key)
+        root.addWidget(self.tabs, stretch=1)
 
         self.init_loss_plot()
         self.init_fidelity_plot()
@@ -619,6 +652,84 @@ class ExperimentWindow(QWidget):
         # mid-flight.
         if self.config is not None and not self.is_running:
             self.start_run(self.config)
+    
+    def _make_clickable(self, key):
+        canvas = self._graphs[key][1]
+        press = {}
+
+        def on_press(ev):
+            press["xy"] = (ev.x, ev.y)
+
+        def on_release(ev):
+            p = press.get("xy")
+            if p is None or self.tabs.currentIndex() != 0:
+                return
+            if abs(ev.x - p[0]) < 5 and abs(ev.y - p[1]) < 5:
+                self._open_tab(key)
+
+        canvas.mpl_connect("button_press_event", on_press)
+        canvas.mpl_connect("button_release_event", on_release)
+        canvas.setCursor(Qt.PointingHandCursor)
+
+    def _open_tab(self, key):
+        if key in self._tab_pages:
+            self.tabs.setCurrentWidget(self._tab_pages[key][0])
+            return
+        title, canvas, save, card = self._graphs[key]
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(20, 14, 20, 20)
+        frame = QGroupBox(title)
+        frame.setStyleSheet(panel_card_stylesheet())
+        frame_lay = QVBoxLayout(frame)
+        frame_lay.setContentsMargins(16, 14, 16, 16)
+        frame_lay.setSpacing(10)
+        bar = QHBoxLayout()
+        bar.addStretch()
+        save_btn = QPushButton("💾  Save")
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.ACCENT};
+                border: 1px solid {Colors.ACCENT}; border-radius: 8px;
+                padding: 5px 16px; font-weight: 600;
+            }}
+            QPushButton:hover {{ background: rgba(135,206,235,0.12); }}
+        """)
+        save_btn.clicked.connect(save)
+        bar.addWidget(save_btn)
+        frame_lay.addLayout(bar)
+        body = QVBoxLayout()
+        frame_lay.addLayout(body, stretch=1)
+        lay.addWidget(frame)
+        self._tab_pages[key] = (page, body)
+        idx = self.tabs.addTab(page, title.split(" (")[0])
+        self.tabs.setCurrentIndex(idx)
+
+    def _rehome(self, index):
+        page = self.tabs.widget(index)
+        for key, (title, canvas, save, card) in self._graphs.items():
+            entry = self._tab_pages.get(key)
+            if entry is not None and entry[0] is page:
+                if canvas.parent() is not entry[1].parentWidget():
+                    entry[1].addWidget(canvas)
+                canvas.setCursor(Qt.ArrowCursor)
+            else:
+                if canvas.parent() is not card:
+                    card.layout().addWidget(canvas)
+                canvas.setCursor(Qt.PointingHandCursor)
+            canvas.draw_idle()
+
+    def _close_tab(self, index):
+        if index == 0:
+            return
+        page = self.tabs.widget(index)
+        key = next(k for k, (p, _) in self._tab_pages.items() if p is page)
+        _, canvas, _, card = self._graphs[key]
+        card.layout().addWidget(canvas)
+        del self._tab_pages[key]
+        self.tabs.removeTab(index)
+        page.deleteLater()
 
     # -----------------------------------------------------
     # Recap / logging
