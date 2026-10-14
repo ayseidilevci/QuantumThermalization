@@ -53,6 +53,7 @@ from frontend.colors import Colors
 from frontend.session import SessionConfig
 from frontend.upload import save_session_dialog
 from frontend.plots import MplCanvas, style_axes, panel
+from frontend.device_panel import QubitTopologyWidget, KNOWN_BACKEND_TOPOLOGY, _lookup_by_name
 
 SIDEBAR_WIDTH = 300
 BOTTOM_BAR_HEIGHT = 200
@@ -356,6 +357,12 @@ class ExperimentWindow(QWidget):
             self.recap_form.addRow(f"{key}:", lbl)
         side.addLayout(self.recap_form)
 
+        self.qubit_view = QubitTopologyWidget()
+        self.qubit_view.set_read_only(True)
+        self.qubit_view.setFixedHeight(190)
+        self.qubit_view.hide()
+        side.addWidget(self.qubit_view)
+
         side.addSpacing(6)
         self.result_lbl = QLabel("")
         self.result_lbl.setWordWrap(True)
@@ -539,6 +546,14 @@ class ExperimentWindow(QWidget):
         self.save_session_btn.setEnabled(False)
         self.restart_btn.setEnabled(False)
         self._update_recap(config)
+        known = _lookup_by_name(config.backend_name, KNOWN_BACKEND_TOPOLOGY)
+        if known is not None and config.qubit_mapping:
+            self.qubit_view.set_topology(
+                len(known["coords"]), {frozenset(p) for p in known["edges"]}, known["coords"])
+            self.qubit_view.set_assignment(config.qubit_mapping)
+            self.qubit_view.show()
+        else:
+            self.qubit_view.hide()
         self.result_lbl.setText("")
         self.status_log.clear()
         self.init_loss_plot()

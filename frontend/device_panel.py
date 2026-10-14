@@ -319,6 +319,7 @@ class QubitTopologyWidget(QGraphicsView):
         self._drag_from = None         # qubit a press started on
         self._drag_line = None         # rubber-band line while dragging
         self._dragging = False         # moved off the start qubit since press
+        self._read_only = False
 
     # ---- public API --------------------------------------------------
     def set_topology(self, num_qubits: int, edges: set, coords: dict = None):
@@ -363,6 +364,8 @@ class QubitTopologyWidget(QGraphicsView):
     # qubit picks A1 (start) -> A2 (end); releasing on the same qubit counts
     # as a click (see _click_qubit).
     def mousePressEvent(self, event):
+        if self._read_only:
+            return
         if event.button() == Qt.LeftButton:
             self._drag_from = self._node_at(self.mapToScene(event.pos()))
             self._dragging = False
@@ -445,6 +448,21 @@ class QubitTopologyWidget(QGraphicsView):
                 self._assignment["B1"], self._assignment["B2"] = pair
         self._redraw_scene()
         self._emit_state()
+
+    def set_read_only(self, value: bool = True):
+        self._read_only = value
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setMinimumHeight(0)
+        self._fit()
+
+    def _fit(self):
+        if self._read_only and not self.scene().sceneRect().isEmpty():
+            self.fitInView(self.scene().sceneRect(), Qt.KeepAspectRatio)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
 
     # ---- drawing ---------------------------------------------------------
     def _redraw_scene(self):
@@ -545,6 +563,7 @@ class QubitTopologyWidget(QGraphicsView):
                 scene.addItem(role_label)
 
         scene.setSceneRect(scene.itemsBoundingRect().adjusted(-30, -30, 30, 30))
+        self._fit()
 
     def _missing_pairs(self):
         if len(self._assignment) != len(ROLES):
