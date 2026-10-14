@@ -6,6 +6,7 @@ the rest of the Qt chrome."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QSizePolicy, QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton,
+    QFrame, QLabel,
 )
 
 from matplotlib.figure import Figure
@@ -26,6 +27,9 @@ class MplCanvas(FigureCanvas):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumHeight(120)
         self.setMinimumWidth(160)
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 def style_axes(ax, title=None, xlabel=None, ylabel=None):
@@ -49,24 +53,51 @@ def style_axes(ax, title=None, xlabel=None, ylabel=None):
     return ax
 
 
-def panel(title: str, widget: QWidget, on_save=None) -> QGroupBox:
-    """A plot card: title, optional small Save button in the corner (wired
-    to on_save), then the panel's content widget. Ported from the `gui`
-    branch's tfd_gui.py."""
-    box = QGroupBox(title)
-    box.setStyleSheet(panel_card_stylesheet())
+def panel(title: str, widget: QWidget, on_save=None) -> QFrame:
+    c = Colors
+    box = QFrame()
+    box.setObjectName("card")
+    box.setStyleSheet(f"""
+        QFrame#card {{
+            background: {c.BG_2}; border: 1px solid {c.BORDER}; border-radius: 14px;
+        }}
+        QLabel#cardTitle {{
+            color: {c.TEXT}; font-size: 12pt; font-weight: 700;
+            background: transparent; border: none;
+        }}
+        QFrame#cardDivider {{ background: {c.BORDER}; border: none; }}
+    """)
     lay = QVBoxLayout(box)
+    lay.setContentsMargins(18, 14, 18, 16)
+    lay.setSpacing(10)
+
+    head = QHBoxLayout()
+    head.setContentsMargins(0, 0, 0, 0)
+    heading = QLabel(title)
+    heading.setObjectName("cardTitle")
+    head.addWidget(heading)
+    head.addStretch()
     if on_save is not None:
-        bar = QHBoxLayout()
-        bar.setContentsMargins(0, 0, 0, 0)
-        bar.addStretch()
-        save_btn = QPushButton("💾 Save")
+        save_btn = QPushButton("💾  Save")
         save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.setStyleSheet(f"padding: 2px 10px; font-weight: 600; color: {Colors.TEXT};")
+        save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {c.ACCENT};
+                border: 1px solid {c.ACCENT}; border-radius: 8px;
+                padding: 5px 16px; font-weight: 600;
+            }}
+            QPushButton:hover {{ background: rgba(135,206,235,0.12); }}
+        """)
         save_btn.clicked.connect(on_save)
-        bar.addWidget(save_btn)
-        lay.addLayout(bar)
-    lay.addWidget(widget)
+        head.addWidget(save_btn)
+    lay.addLayout(head)
+
+    divider = QFrame()
+    divider.setObjectName("cardDivider")
+    divider.setFixedHeight(1)
+    lay.addWidget(divider)
+
+    lay.addWidget(widget, stretch=1)
     return box
 
 

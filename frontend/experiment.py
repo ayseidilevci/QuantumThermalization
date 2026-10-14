@@ -31,9 +31,9 @@ from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QLabel, QPushButton,
-    QPlainTextEdit, QFileDialog, QMessageBox, QTabWidget, QTabBar, QGroupBox,
+    QPlainTextEdit, QFileDialog, QMessageBox, QTabWidget, QTabBar, QScrollArea,
 )
-from frontend.plots import MplCanvas, style_axes, panel, panel_card_stylesheet
+from frontend.plots import MplCanvas, style_axes, panel
 from frontend.device_panel import QubitTopologyWidget, KNOWN_BACKEND_TOPOLOGY, _lookup_by_name
 
 from scipy.optimize import minimize
@@ -488,6 +488,10 @@ class ExperimentWindow(QWidget):
         self.fidelity_canvas = MplCanvas()
         self.ideal_rho_canvas = MplCanvas(height=4.0, use_layout=False)
         self.rho_canvas = MplCanvas(height=4.0, use_layout=False)
+        self.fidelity_canvas.setMinimumHeight(340)
+        self.loss_canvas.setMinimumHeight(340)
+        self.ideal_rho_canvas.setMinimumHeight(420)
+        self.rho_canvas.setMinimumHeight(420)
 
         # 2x2 results grid: live curves on top, ideal vs. observed ρ_A
         # side by side underneath.
@@ -525,6 +529,7 @@ class ExperimentWindow(QWidget):
         main_layout.addWidget(circuit_toggle)
 
         self.circ_canvas = MplCanvas(height=2.6)
+        self.circ_canvas.setMinimumHeight(340)
         self.circuit_card = _card("circuit", "Circuit (reference)", self.circ_canvas,
                                   self._save_circuit)
         self.circuit_card.hide()
@@ -552,6 +557,22 @@ class ExperimentWindow(QWidget):
             QTabBar::tab:hover:!selected {{ background: {Colors.BG_3}; }}
         """)
         self.tabs.addTab(overview, "Overview")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background: transparent; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+            QScrollBar::handle:vertical {{
+                background: {Colors.BORDER}; border-radius: 5px; min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {Colors.TEXT_MUTED}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+        """)
+        scroll.setWidget(overview)
+        self.tabs.addTab(scroll, "Overview")
         self.tabs.tabBar().setTabButton(0, QTabBar.RightSide, None)
         self.tabs.tabBar().setTabButton(0, QTabBar.LeftSide, None)
         self.tabs.currentChanged.connect(self._rehome)
@@ -679,29 +700,10 @@ class ExperimentWindow(QWidget):
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(20, 14, 20, 20)
-        frame = QGroupBox(title)
-        frame.setStyleSheet(panel_card_stylesheet())
-        frame_lay = QVBoxLayout(frame)
-        frame_lay.setContentsMargins(16, 14, 16, 16)
-        frame_lay.setSpacing(10)
-        bar = QHBoxLayout()
-        bar.addStretch()
-        save_btn = QPushButton("💾  Save")
-        save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {Colors.ACCENT};
-                border: 1px solid {Colors.ACCENT}; border-radius: 8px;
-                padding: 5px 16px; font-weight: 600;
-            }}
-            QPushButton:hover {{ background: rgba(135,206,235,0.12); }}
-        """)
-        save_btn.clicked.connect(save)
-        bar.addWidget(save_btn)
-        frame_lay.addLayout(bar)
-        body = QVBoxLayout()
-        frame_lay.addLayout(body, stretch=1)
-        lay.addWidget(frame)
+        holder = QWidget()
+        body = QVBoxLayout(holder)
+        body.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(panel(title, holder, on_save=save))
         self._tab_pages[key] = (page, body)
         idx = self.tabs.addTab(page, title.split(" (")[0])
         self.tabs.setCurrentIndex(idx)
