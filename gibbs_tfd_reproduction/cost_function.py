@@ -27,15 +27,11 @@ from tomography import build_tomography_circuit, reconstruct_density_matrix
 
 class CostFunction:
     def __init__(self, varsigma=1.57, backend=None, initial_layout=(0,2,3,5), subsystem_qubits=(0,1),
-<<<<<<< Updated upstream
-                 tomography=True):
+                 tomography=True, results_dir="results", run_tag=None):
         # tomography=False skips the per-evaluation 9-setting tomography (and
         # its live PNG): on a noisy simulator it costs several times more than
         # the cost circuit itself, so callers that only need the cost value
         # can turn it off and run tomography.run_tomography when they want it.
-=======
-                 results_dir="results", run_tag=None):
->>>>>>> Stashed changes
         self.varsigma = varsigma
         self.tomography = tomography
         self.backend = backend
@@ -46,6 +42,13 @@ class CostFunction:
         self.tomography_history = []
         self.subsystem_qubits = subsystem_qubits
 
+        # --- Real-time progress log ---
+        # One line gets appended here the instant a hardware job's cost
+        # comes back, so whatever has run so far survives a crash, a
+        # dropped connection, or a Ctrl-C mid-sweep. run_tag ties every
+        # call in one script run to the same file; pass one in explicitly
+        # (e.g. from experiment.py) if you want several CostFunction
+        # instances in the same run to share a single log.
         self.results_dir = results_dir
         os.makedirs(self.results_dir, exist_ok=True)
         self.run_tag = run_tag or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -108,25 +111,12 @@ class CostFunction:
 
         cost_B = exp_X_A + exp_X_B + self.varsigma*(exp_ZZ_A+exp_ZZ_B) - beta**(-self.varsigma)*(exp_XX_BA+exp_ZZ_BA)
 
-<<<<<<< Updated upstream
-        if self.tomography:
-            raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
-            counts_tomo = get_multi_counts(raw_tomo, 4)
-            probs_tomo = get_multi_probs(counts_tomo)
-            tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
-                                 for p in probs_tomo[:9]]
-            rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
-            self.tomography_history.append(rho)
-
-            plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
-                         save_path=f"plots/tomography_live_beta{beta}.png")
-
-=======
         # --- Real-time print + on-disk append, the moment this iteration's
-        # cost is known. This happens on EVERY call, i.e. every real
-        # hardware job, so you can `tail -f` the log file or just watch
-        # stdout to see the optimizer actually converging live, and
-        # whatever ran before a crash/interrupt is already saved to disk. ---
+        # cost is known. This happens on EVERY call -- regardless of the
+        # tomography toggle above, since it only needs cost_B -- so you can
+        # `tail -f` the log file or just watch stdout to see the optimizer
+        # actually converging live, and whatever ran before a crash/interrupt
+        # is already saved to disk. ---
         record = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "beta": beta,
@@ -144,19 +134,19 @@ class CostFunction:
             flush=True,
         )
 
-        raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
-        counts_tomo = get_multi_counts(raw_tomo, 4)
-        probs_tomo = get_multi_probs(counts_tomo)
-        tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
-                             for p in probs_tomo[:9]]
-        rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
-        self.tomography_history.append(rho)
+        if self.tomography:
+            raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
+            counts_tomo = get_multi_counts(raw_tomo, 4)
+            probs_tomo = get_multi_probs(counts_tomo)
+            tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
+                                 for p in probs_tomo[:9]]
+            rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
+            self.tomography_history.append(rho)
 
-        os.makedirs("plots", exist_ok=True)
-        plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
-                     save_path=f"plots/tomography_live_beta{beta}.png")
+            os.makedirs("plots", exist_ok=True)
+            plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
+                         save_path=f"plots/tomography_live_beta{beta}.png")
 
->>>>>>> Stashed changes
         self.cost_history.append(cost_B)
         return cost_B
 
