@@ -1,3 +1,7 @@
+import json
+import os
+from datetime import datetime
+
 from qiskit import QuantumCircuit, transpile
 from qi_utilities.utility_functions.circuit_modifiers import apply_pre_measurement_rotations
 from qi_utilities.utility_functions.raw_data_processing import (
@@ -23,11 +27,15 @@ from tomography import build_tomography_circuit, reconstruct_density_matrix
 
 class CostFunction:
     def __init__(self, varsigma=1.57, backend=None, initial_layout=(0,2,3,5), subsystem_qubits=(0,1),
+<<<<<<< Updated upstream
                  tomography=True):
         # tomography=False skips the per-evaluation 9-setting tomography (and
         # its live PNG): on a noisy simulator it costs several times more than
         # the cost circuit itself, so callers that only need the cost value
         # can turn it off and run tomography.run_tomography when they want it.
+=======
+                 results_dir="results", run_tag=None):
+>>>>>>> Stashed changes
         self.varsigma = varsigma
         self.tomography = tomography
         self.backend = backend
@@ -37,6 +45,11 @@ class CostFunction:
         self.cost_history = []
         self.tomography_history = []
         self.subsystem_qubits = subsystem_qubits
+
+        self.results_dir = results_dir
+        os.makedirs(self.results_dir, exist_ok=True)
+        self.run_tag = run_tag or datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_path = os.path.join(self.results_dir, f"progress_{self.run_tag}.jsonl")
 
     def cost_function(self, params, beta):
         gamma1, gamma2, alpha1, alpha2 = params
@@ -95,6 +108,7 @@ class CostFunction:
 
         cost_B = exp_X_A + exp_X_B + self.varsigma*(exp_ZZ_A+exp_ZZ_B) - beta**(-self.varsigma)*(exp_XX_BA+exp_ZZ_BA)
 
+<<<<<<< Updated upstream
         if self.tomography:
             raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
             counts_tomo = get_multi_counts(raw_tomo, 4)
@@ -107,9 +121,45 @@ class CostFunction:
             plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
                          save_path=f"plots/tomography_live_beta{beta}.png")
 
+=======
+        # --- Real-time print + on-disk append, the moment this iteration's
+        # cost is known. This happens on EVERY call, i.e. every real
+        # hardware job, so you can `tail -f` the log file or just watch
+        # stdout to see the optimizer actually converging live, and
+        # whatever ran before a crash/interrupt is already saved to disk. ---
+        record = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "beta": beta,
+            "iteration": self.iteration,
+            "gamma1": float(gamma1), "gamma2": float(gamma2),
+            "alpha1": float(alpha1), "alpha2": float(alpha2),
+            "cost": float(cost_B),
+        }
+        with open(self.log_path, "a") as f:
+            f.write(json.dumps(record) + "\n")
+        print(
+            f"[{record['timestamp']}] beta={beta:<10} iter={self.iteration:<4} "
+            f"g1={gamma1:+.4f} g2={gamma2:+.4f} a1={alpha1:+.4f} a2={alpha2:+.4f} "
+            f"cost={cost_B:+.5f}",
+            flush=True,
+        )
+
+        raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
+        counts_tomo = get_multi_counts(raw_tomo, 4)
+        probs_tomo = get_multi_probs(counts_tomo)
+        tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
+                             for p in probs_tomo[:9]]
+        rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
+        self.tomography_history.append(rho)
+
+        os.makedirs("plots", exist_ok=True)
+        plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
+                     save_path=f"plots/tomography_live_beta{beta}.png")
+
+>>>>>>> Stashed changes
         self.cost_history.append(cost_B)
         return cost_B
-    
+
     # def minimize_cost(self, x0, beta, method='COBYLA', maxiter=None, callback=None):
     #     """Run the classical optimizer. `method` is any scipy.optimize.minimize
     #     method that supports a plain `callback(xk)` (COBYLA, Nelder-Mead and
@@ -126,7 +176,7 @@ class CostFunction:
         optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='COBYLA', options={'maxiter': 100, 'rhobeg': 0.5})
         # optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='BFGS', options={'maxiter': 100, 'eps': 0.1})
         return optimized_params.x
-    
+
     def cost_lower_bound(beta, varsigma=1.57):
         paulis = {
             "IIXI": 1, "IIIX": 1,
@@ -139,7 +189,7 @@ class CostFunction:
         op = SparsePauliOp(list(paulis.keys()), list(paulis.values()))
         mat = op.to_matrix()
         return np.linalg.eigvalsh(mat).min()
-    
+
     def _extract_ro_matrices(self, counts_prep0, counts_prep1):
         shots0, shots1 = sum(counts_prep0.values()), sum(counts_prep1.values())
         ro_matrices = {}

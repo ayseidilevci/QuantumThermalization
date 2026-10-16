@@ -18,8 +18,10 @@ stream dozens of steps smoothly in under a second.
 """
 
 import csv
+import json
 import time
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -50,7 +52,7 @@ from gibbs_tfd_reproduction.cost_function import CostFunction
 from qi_utilities.device_simulation.simulators import NoisySimulator
 
 from backend import starmon7
-from backend.experiment_manager import write_experiment_settings
+from backend.experiment_manager import PROJECTS_PATH, write_experiment_settings
 from frontend.colors import Colors
 from frontend.session import SessionConfig, DEFAULT_START_ANGLE
 from frontend.upload import save_session_dialog
@@ -161,6 +163,18 @@ class OptimizationWorker(QObject):
         betas = [b for b in (1e-8, 0.5, 1, 5) if b < config.beta] + [config.beta]
         current_beta = [betas[0]]
 
+        # Live, incremental progress log: one line appended on every single
+        # optimizer iteration (see callback() below), independent of
+        # whether this run ever reaches the real-backend submission at the
+        # end. So a real user's run can be watched as it happens, and
+        # whatever ran before a crash, a force-quit, or a Stop click is
+        # already safely on disk -- not just held in this worker's memory.
+        run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+        live_dir = PROJECTS_PATH / "_live_runs"
+        live_dir.mkdir(parents=True, exist_ok=True)
+        self.live_log_path = live_dir / f"{config.backend_name}_{run_tag}.jsonl"
+        self.log.emit(f"Live progress log: {self.live_log_path}")
+
         # Computed once up front rather than per-iteration or only at the
         # end: the true Gibbs state depends only on beta, not on the
         # optimizer's current guess, so the live fidelity trace below and
@@ -229,6 +243,7 @@ class OptimizationWorker(QObject):
             bound = CostFunction.cost_lower_bound(current_beta[0])
             cost = (current_cost - bound) / abs(bound)
             self.progress.emit(iteration[0], float(cost))
+            fid = None
             try:
                 if iteration[0] % rho_every == 0:
                     self.rho_progress.emit(rho_a)
@@ -238,6 +253,22 @@ class OptimizationWorker(QObject):
                 self.fidelity_progress.emit(iteration[0], float(fid))
             except Exception:
                 pass  # a live preview glitch shouldn't kill the optimization
+
+            # Append this iteration to disk the instant it's known, rather
+            # than waiting for the run to finish.
+            try:
+                with open(self.live_log_path, "a") as f:
+                    f.write(json.dumps({
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "beta": current_beta[0],
+                        "iteration": iteration[0],
+                        "gamma1": float(xk[0]), "gamma2": float(xk[1]),
+                        "alpha1": float(xk[2]), "alpha2": float(xk[3]),
+                        "cost": float(cost_fn.cost_history[-1]),
+                        "fidelity": fid,
+                    }) + "\n")
+            except Exception:
+                pass  # a logging hiccup shouldn't kill the optimization
             time.sleep(_STEP_DELAY_SECONDS)
 
         self.log.emit(
@@ -261,11 +292,12 @@ class OptimizationWorker(QObject):
                 x0 = result.x
             final_params = result.x
         except _Aborted:
-            self.log.emit("Aborted.")
+            self.log.emit(f"Aborted. Progress up to this point is saved in {self.live_log_path}")
             self.finished.emit({"aborted": True})
             return
         except Exception as exc:
             self.log.emit(f"Optimization failed: {exc}")
+            self.log.emit(f"Progress up to this point is saved in {self.live_log_path}")
             self.finished.emit({"aborted": True, "error": str(exc)})
             return
 
@@ -294,17 +326,40 @@ class OptimizationWorker(QObject):
             backend = self.manager.get_backend(config.backend_name)
             initial_layout = [config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
             qc = final_circuit.as_qiskit_circuit()
-            if local:
-                # The local emulator returns counts only for measured qubits,
-                # and rebuilds circuits with default-named registers — so
-                # measure into a plain "c" register, not measure_all()'s "meas".
-                measured = QuantumCircuit(qc.num_qubits, qc.num_qubits)
-                measured.compose(qc, inplace=True)
-                measured.measure(range(qc.num_qubits), range(qc.num_qubits))
-                qc = measured
+            # Always measure, for every backend -- local or real. This used
+            # to be gated behind `if local:`, on the belief that only the
+            # local emulator needed it; in fact TFDCircuit.as_qiskit_circuit()
+            # never adds measurement on its own, so a REAL backend (Tuna-N)
+            # was being sent a circuit with no measure() at all. That's
+            # exactly why it failed server-side with "FEC: Execute failed.
+            # Did not get a dataset back" -- there was nothing to measure, so
+            # no dataset could ever come back. Measuring into a plain "c"
+            # register (not measure_all()'s "meas") is what the local
+            # emulator specifically needs; it's also perfectly fine for a
+            # real backend, so one code path now covers both.
+            measured = QuantumCircuit(qc.num_qubits, qc.num_qubits)
+            measured.compose(qc, inplace=True)
+            measured.measure(range(qc.num_qubits), range(qc.num_qubits))
+            qc = measured
             transpiled = transpile(qc, backend, initial_layout=initial_layout)
-            job, _results = self.manager.submit_circuit(transpiled, backend)
+            job, job_results = self.manager.submit_circuit(transpiled, backend)
             submitted = job is not None
+
+            # The actual measured bitstring counts QI/the emulator returned
+            # for this one real/local job -- previously discarded (captured
+            # as `_results` and never read again), so the Run screen had no
+            # way to show what really came back, only what the LOCAL
+            # training simulation last computed. get_counts() is the
+            # standard Qiskit Result accessor; wrapped defensively since a
+            # real backend's raw result shape isn't something to trust
+            # blindly from here.
+            real_counts = None
+            if submitted and job_results is not None:
+                try:
+                    real_counts = job_results.get_counts()
+                except Exception as exc:
+                    self.log.emit(f"Couldn't read back measured counts: {exc}")
+
             if submitted:
                 try:
                     record = self.manager.save_job(job)
@@ -320,6 +375,7 @@ class OptimizationWorker(QObject):
                             "final_cost": final_cost,
                             "fidelity": fidelity,
                             "job_id": str(self.manager.get_job_id(job)),
+                            "live_log": str(self.live_log_path),
                         },
                     })
                     self.log.emit(f"Saved to {record.project_dir}")
@@ -336,6 +392,7 @@ class OptimizationWorker(QObject):
             "rho": rho_final,
             "fidelity": fidelity,
             "submitted": submitted,
+            "real_counts": real_counts,
         })
 
 
@@ -353,6 +410,8 @@ class ExperimentWindow(QWidget):
         self.fidelity_x, self.fidelity_y = [], []
         self._last_qc = None
         self._last_rho = None
+        self._last_real_counts = None
+        self._last_ideal_probs = None
         self._last_params = None
         self._target_rho = None
         self._ideal_zmax = None
@@ -521,13 +580,21 @@ class ExperimentWindow(QWidget):
         self.fidelity_canvas = MplCanvas()
         self.ideal_rho_canvas = MplCanvas(height=4.0, use_layout=False)
         self.rho_canvas = MplCanvas(height=4.0, use_layout=False)
+        self.ideal_counts_canvas = MplCanvas(height=3.4)
+        self.real_counts_canvas = MplCanvas(height=3.4)
         self.fidelity_canvas.setMinimumHeight(340)
         self.loss_canvas.setMinimumHeight(340)
         self.ideal_rho_canvas.setMinimumHeight(420)
         self.rho_canvas.setMinimumHeight(420)
+        self.ideal_counts_canvas.setMinimumHeight(340)
+        self.real_counts_canvas.setMinimumHeight(340)
 
-        # 2x2 results grid: live curves on top, ideal vs. observed ρ_A
-        # side by side underneath.
+        # 3x2 results grid: live curves, ideal vs. observed ρ_A, and ideal
+        # vs. real measurement histograms -- all three rows the same
+        # always-visible, click-to-expand-as-a-tab pattern (via _card()
+        # below), so the real/ideal counts pair behaves exactly like the
+        # density-matrix pair above it rather than being its own special
+        # collapsible thing.
         grid = QGridLayout()
         grid.setSpacing(10)
         def _card(key, title, canvas, save):
@@ -535,8 +602,6 @@ class ExperimentWindow(QWidget):
             self._graphs[key] = (title, canvas, save, card)
             return card
 
-        grid = QGridLayout()
-        grid.setSpacing(10)
         grid.addWidget(_card("fidelity", "Fidelity to target (live)", self.fidelity_canvas,
                              self._save_fidelity), 0, 0)
         grid.addWidget(_card("loss", "Cost function (live)", self.loss_canvas,
@@ -545,8 +610,13 @@ class ExperimentWindow(QWidget):
                              self._save_ideal_density), 1, 0)
         grid.addWidget(_card("measured", "Measured density matrix (tomography)", self.rho_canvas,
                              self._save_density), 1, 1)
-        for i in (0, 1):
+        grid.addWidget(_card("ideal_counts", "Ideal measurement histogram (exact statevector)",
+                             self.ideal_counts_canvas, self._save_ideal_counts), 2, 0)
+        grid.addWidget(_card("real_counts", "Measured counts (real hardware)",
+                             self.real_counts_canvas, self._save_real_counts), 2, 1)
+        for i in (0, 1, 2):
             grid.setRowStretch(i, 1)
+        for i in (0, 1):
             grid.setColumnStretch(i, 1)
         main_layout.addLayout(grid, stretch=1)
 
@@ -618,6 +688,7 @@ class ExperimentWindow(QWidget):
         self.init_fidelity_plot()
         self._draw_empty_density()
         self._draw_ideal_density()
+        self._render_counts_pair(None, None)
 
     # -----------------------------------------------------
     # Public API (driven by main.py)
@@ -657,6 +728,21 @@ class ExperimentWindow(QWidget):
         self._last_rho = None
         self._draw_ideal_density()
         self._draw_empty_density()
+
+        # Show the ideal histogram for the starting-guess angles right away
+        # (same spirit as _draw_circuit_for above), and clear any previous
+        # run's real counts -- this run's own submission, if it gets that
+        # far, repopulates the real side in _on_finished.
+        self._last_real_counts = None
+        try:
+            ideal_probs = TFDCircuit(
+                config.gamma1, config.gamma2, config.alpha1, config.alpha2,
+            ).get_state_vector().probabilities_dict()
+        except Exception as exc:
+            self._on_log(f"Couldn't compute the ideal measurement histogram: {exc}")
+            ideal_probs = None
+        self._last_ideal_probs = ideal_probs
+        self._render_counts_pair(ideal_probs, None)
 
         self.thread = QThread()
         self.worker = OptimizationWorker(self.manager, config)
@@ -706,7 +792,7 @@ class ExperimentWindow(QWidget):
         # mid-flight.
         if self.config is not None and not self.is_running:
             self.start_run(self.config)
-    
+
     def _make_clickable(self, key):
         canvas = self._graphs[key][1]
         press = {}
@@ -844,6 +930,25 @@ class ExperimentWindow(QWidget):
             + ("Submitted to backend." if result.get("submitted")
                else "Submission did not complete — see status log."))
 
+        # The actual measured counts from the one real/local job this run
+        # submitted -- previously computed and discarded, never shown. Draw
+        # them and auto-expand the panel so a successful submission is
+        # impossible to miss; leave it collapsed (with its placeholder) if
+        # the submission failed or returned nothing to read back. The ideal
+        # side always redraws for the converged angles (even if the real
+        # submission failed, "what should this have produced" is still
+        # worth showing); the real side only fills in when there's
+        # something real to show.
+        real_counts = result.get("real_counts")
+        self._last_real_counts = real_counts
+        try:
+            ideal_probs = TFDCircuit(*params).get_state_vector().probabilities_dict()
+        except Exception as exc:
+            self._on_log(f"Couldn't compute the ideal measurement histogram: {exc}")
+            ideal_probs = None
+        self._last_ideal_probs = ideal_probs
+        self._render_counts_pair(ideal_probs, real_counts)
+
     # -----------------------------------------------------
     # Plotting
     # -----------------------------------------------------
@@ -944,6 +1049,64 @@ class ExperimentWindow(QWidget):
         else:
             rho, title = self._target_rho, r"$\rho_A^{\mathrm{ideal}} = e^{-\beta H} / Z$"
         self._render_density(self.ideal_rho_canvas, rho, title=title, zmax=self._ideal_zmax)
+
+    def _render_counts_pair(self, ideal_probs: dict | None, real_counts: dict | None):
+        """Ideal (exact statevector) vs. real (hardware-measured) histogram,
+        drawn on the SAME bitstring ordering and the SAME y-scale (both
+        panels show probability/fraction-of-shots, 0 to a shared max) so
+        they're genuinely comparable bar-for-bar -- the same spirit as the
+        ideal/measured density-matrix pair sharing one zmax above. There's
+        no phase information here (that's what the density-matrix pair is
+        for); this is purely the measured/predicted population over each of
+        the 2^4 computational-basis outcomes.
+
+        Ordering is picked from whichever side has data (real takes
+        priority once it exists, since that's the thing you actually care
+        about reading off), capped at the top 24 bitstrings so a device
+        with many unused register slots doesn't produce a wall of
+        near-zero bars.
+        """
+        if real_counts:
+            order = [k for k, _ in sorted(real_counts.items(), key=lambda kv: kv[1], reverse=True)][:24]
+        elif ideal_probs:
+            order = [k for k, _ in sorted(ideal_probs.items(), key=lambda kv: kv[1], reverse=True)][:24]
+        else:
+            order = []
+
+        real_total = sum(real_counts.values()) if real_counts else 0
+        ideal_values = [ideal_probs.get(b, 0.0) for b in order] if ideal_probs else []
+        real_values = ([real_counts.get(b, 0) / real_total for b in order] if real_counts and real_total
+                        else [])
+        ymax = max([0.05] + ideal_values + real_values) * 1.15
+
+        def _draw(canvas, values, title, empty_message):
+            fig = canvas.fig
+            fig.clear()
+            ax = fig.add_subplot(111)
+            ax.set_facecolor(Colors.BG_3)
+            if not order or not values:
+                ax.text(0.5, 0.5, empty_message, transform=ax.transAxes,
+                        ha="center", va="center", color=Colors.TEXT_MUTED, fontsize=10)
+                ax.set_xticks([]); ax.set_yticks([])
+            else:
+                ax.bar(range(len(order)), values, color=Colors.ACCENT, width=0.7)
+                ax.set_xticks(range(len(order)))
+                ax.set_xticklabels(order, rotation=60, ha="right", fontsize=8)
+                ax.set_ylim(0, ymax)
+                style_axes(ax, xlabel="Measured bitstring", ylabel="Probability")
+            ax.set_title(title, color=Colors.TEXT_DIM, fontsize=9, pad=8)
+            for spine in ax.spines.values():
+                spine.set_color(Colors.BORDER)
+            fig.tight_layout()
+            canvas.draw_idle()
+
+        _draw(self.ideal_counts_canvas, ideal_values,
+              r"$|\langle b|\psi_{\mathrm{ideal}}\rangle|^2$",
+              "No angles to compute yet.")
+        _draw(self.real_counts_canvas, real_values,
+              f"{real_total} shots total" if real_total else "Measured (real hardware)",
+              "No real hardware data yet.\nAppears once a run finishes with "
+              "“Submitted to backend.”")
 
     def _density_zmax(self) -> float:
         """Shared z-axis top for the ideal and observed plots: the larger
@@ -1075,6 +1238,47 @@ class ExperimentWindow(QWidget):
                 QMessageBox.warning(self, "Export failed", str(e))
         else:
             self.circ_canvas.fig.savefig(path, facecolor=self.circ_canvas.fig.get_facecolor())
+
+    def _save_ideal_counts(self):
+        if not self._last_ideal_probs:
+            QMessageBox.information(
+                self, "Nothing to save", "No angles computed yet.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save ideal histogram", "ideal_probabilities.csv",
+            "CSV data (*.csv);;PNG image (*.png)")
+        if not path:
+            return
+        if path.lower().endswith(".png"):
+            self.ideal_counts_canvas.fig.savefig(
+                path, facecolor=self.ideal_counts_canvas.fig.get_facecolor())
+        else:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["bitstring", "probability"])
+                w.writerows(sorted(self._last_ideal_probs.items(),
+                                    key=lambda kv: kv[1], reverse=True))
+
+    def _save_real_counts(self):
+        if not self._last_real_counts:
+            QMessageBox.information(
+                self, "Nothing to save",
+                "No real hardware counts yet -- run a submission that completes first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save measured counts", "measured_counts.csv",
+            "CSV data (*.csv);;PNG image (*.png)")
+        if not path:
+            return
+        if path.lower().endswith(".png"):
+            self.real_counts_canvas.fig.savefig(
+                path, facecolor=self.real_counts_canvas.fig.get_facecolor())
+        else:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["bitstring", "shots"])
+                w.writerows(sorted(self._last_real_counts.items(),
+                                    key=lambda kv: kv[1], reverse=True))
 
     def _save_loss(self):
         if not self.loss_x:

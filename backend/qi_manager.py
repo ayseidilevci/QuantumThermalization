@@ -22,11 +22,12 @@ class BackendInfo:
     local: bool = False
 
 
-def _is_live_emulator(name: str) -> bool:
-    """The QI API's own simulators ("QX emulator", "Ry emulator") — not
-    offered in the GUI; Starmon-7 (local emulation) replaces them."""
-    lowered = name.lower()
-    return "emulator" in lowered or "simulator" in lowered
+def _is_allowed_live_backend(name: str) -> bool:
+    """Only the Tuna family is offered as a live backend; everything else
+    (QI's own emulators, retired devices, anything added later) is excluded
+    by default rather than by name-matching a blacklist."""
+    normalized = "".join(ch for ch in name.lower() if ch.isalnum())
+    return normalized in {"tuna5", "tuna9", "tuna17"}
 
 
 # The live API reports a finer-grained status (see
@@ -213,7 +214,7 @@ class QuantumInspireManager:
         self.provider = QIProvider()
 
         for backend in self.provider.backends():
-            if _is_live_emulator(backend.name):
+            if not _is_allowed_live_backend(backend.name):
                 continue
             backend_info = BackendInfo(
                 backend=backend,
@@ -309,3 +310,4 @@ class QuantumInspireManager:
         """Store the job record locally; returns the StoreProjectRecord,
         whose project_dir is the experiment's folder."""
         return StoreProjectRecord(job)
+    
