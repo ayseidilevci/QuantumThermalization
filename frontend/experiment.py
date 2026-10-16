@@ -52,7 +52,7 @@ from qi_utilities.device_simulation.simulators import NoisySimulator
 from backend import starmon7
 from backend.experiment_manager import write_experiment_settings
 from frontend.colors import Colors
-from frontend.session import SessionConfig
+from frontend.session import SessionConfig, DEFAULT_START_ANGLE
 from frontend.upload import save_session_dialog
 from frontend.plots import MplCanvas, style_axes, panel
 
@@ -150,6 +150,13 @@ class OptimizationWorker(QObject):
     def run(self):
         config = self.config
         x0 = np.array([config.gamma1, config.gamma2, config.alpha1, config.alpha2])
+        if np.allclose(x0, 0.0):
+            # All-zero angles are a saddle of the cost at beta > 0 (see
+            # DEFAULT_START_ANGLE), so step off it rather than get stuck.
+            x0 = np.full(4, DEFAULT_START_ANGLE)
+            self.log.emit(
+                f"All starting angles are 0, a saddle point of the cost for beta > 0 "
+                f"-- starting from {DEFAULT_START_ANGLE} instead.")
         iteration = [0]
         betas = [b for b in (1e-8, 0.5, 1, 5) if b < config.beta] + [config.beta]
         current_beta = [betas[0]]
@@ -194,15 +201,35 @@ class OptimizationWorker(QObject):
         # density preview, it doesn't need the same throttling.
         rho_every = max(1, config.iterations // 20)
 
+        # Every cost evaluation of the current beta step as (params, cost,
+        # rho_A). The live plots must show the optimizer's current point xk,
+        # not whatever was evaluated last: optimizers probe trial points
+        # (COBYLA's model steps, Nelder-Mead's reflections, Powell's line
+        # searches) that they then reject, and plotting those made healthy
+        # runs look erratic. xk is always one of the evaluated points, so
+        # it's looked up here instead of re-running circuits for it.
+        evaluations = []
+
+        def evaluate(params, beta):
+            cost = cost_fn.cost_function(params, beta)
+            evaluations.append((np.array(params, dtype=float), cost, cost_fn.tomography_history[-1]))
+            return cost
+
+        def evaluation_at(xk):
+            dists = [np.linalg.norm(params - xk) for params, _, _ in evaluations]
+            i = int(np.argmin(dists))
+            # Fall back to the latest evaluation if xk somehow wasn't evaluated.
+            return evaluations[i] if dists[i] < 1e-9 else evaluations[-1]
+
         def callback(xk):
             if self._abort:
                 raise _Aborted()
             iteration[0] += 1
+            _, current_cost, rho_a = evaluation_at(np.asarray(xk, dtype=float))
             bound = CostFunction.cost_lower_bound(current_beta[0])
-            cost = (cost_fn.cost_history[-1] - bound) / abs(bound)
+            cost = (current_cost - bound) / abs(bound)
             self.progress.emit(iteration[0], float(cost))
             try:
-                rho_a = cost_fn.tomography_history[-1]
                 if iteration[0] % rho_every == 0:
                     self.rho_progress.emit(rho_a)
                 tgt = DensityMatrix(
@@ -221,9 +248,15 @@ class OptimizationWorker(QObject):
                 current_beta[0] = b
                 self.step.emit(b)
                 self.log.emit(f"Optimizing at beta={b}")
+                evaluations.clear()
+                options = {'maxiter': config.iterations}
+                if config.optimizer == "COBYLA":
+                    # Same initial step as CostFunction.minimize_cost. The
+                    # default 1.0 stalls more often near the zero-angle saddle.
+                    options['rhobeg'] = 0.5
                 result = minimize(
-                    cost_fn.cost_function, x0=x0, args=(b,), method=config.optimizer,
-                    options={'maxiter': config.iterations}, callback=callback,
+                    evaluate, x0=x0, args=(b,), method=config.optimizer,
+                    options=options, callback=callback,
                 )
                 x0 = result.x
             final_params = result.x

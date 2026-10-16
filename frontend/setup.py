@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 
 from frontend.colors import Colors
-from frontend.session import SessionConfig
+from frontend.session import SessionConfig, DEFAULT_START_ANGLE
 from frontend.tutorial import TutorialCoach, TutorialStep
 from frontend.device_panel import DevicePanel
 
@@ -224,7 +224,7 @@ class SetupWindow(QWidget):
         box.setRange(-6.283, 6.283)
         box.setSingleStep(0.05)
         box.setDecimals(3)
-        box.setValue(0.0)
+        box.setValue(DEFAULT_START_ANGLE)
         return box
 
     # -----------------------------------------------------

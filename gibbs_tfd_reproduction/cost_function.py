@@ -22,8 +22,14 @@ from tomography import build_tomography_circuit, reconstruct_density_matrix
 # q3 = B1
 
 class CostFunction:
-    def __init__(self, varsigma=1.57, backend=None, initial_layout=(0,2,3,5), subsystem_qubits=(0,1)):
+    def __init__(self, varsigma=1.57, backend=None, initial_layout=(0,2,3,5), subsystem_qubits=(0,1),
+                 tomography=True):
+        # tomography=False skips the per-evaluation 9-setting tomography (and
+        # its live PNG): on a noisy simulator it costs several times more than
+        # the cost circuit itself, so callers that only need the cost value
+        # can turn it off and run tomography.run_tomography when they want it.
         self.varsigma = varsigma
+        self.tomography = tomography
         self.backend = backend
         self.initial_layout = list(initial_layout)
         self.ro_matrices = None
@@ -57,13 +63,15 @@ class CostFunction:
         qc_cost.barrier()
         for q in range(4): qc_cost.measure(q, 12+q)
 
-        qc_tomo, settings = build_tomography_circuit(gamma1, gamma2, alpha1, alpha2,
-                                                       subsystem_qubits=self.subsystem_qubits)
-
         qc_cost_t = transpile(qc_cost, self.backend, initial_layout=self.initial_layout)
-        qc_tomo_t = transpile(qc_tomo, self.backend, initial_layout=self.initial_layout)
+        circuits = [qc_cost_t]
+        if self.tomography:
+            qc_tomo, settings = build_tomography_circuit(gamma1, gamma2, alpha1, alpha2,
+                                                           subsystem_qubits=self.subsystem_qubits)
+            qc_tomo_t = transpile(qc_tomo, self.backend, initial_layout=self.initial_layout)
+            circuits.append(qc_tomo_t)
 
-        job = self.backend.run([qc_cost_t, qc_tomo_t], shots=8192, memory=True)
+        job = self.backend.run(circuits, shots=8192, memory=True)
         result = job.result()
 
         raw_cost = get_raw_data(qc_cost_t, result, circuit_nr=0)
@@ -87,17 +95,18 @@ class CostFunction:
 
         cost_B = exp_X_A + exp_X_B + self.varsigma*(exp_ZZ_A+exp_ZZ_B) - beta**(-self.varsigma)*(exp_XX_BA+exp_ZZ_BA)
 
-        raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
-        counts_tomo = get_multi_counts(raw_tomo, 4)
-        probs_tomo = get_multi_probs(counts_tomo)
-        tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
-                             for p in probs_tomo[:9]]
-        rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
-        self.tomography_history.append(rho)
+        if self.tomography:
+            raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
+            counts_tomo = get_multi_counts(raw_tomo, 4)
+            probs_tomo = get_multi_probs(counts_tomo)
+            tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
+                                 for p in probs_tomo[:9]]
+            rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
+            self.tomography_history.append(rho)
 
-        plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
-                     save_path=f"plots/tomography_live_beta{beta}.png")
-        
+            plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
+                         save_path=f"plots/tomography_live_beta{beta}.png")
+
         self.cost_history.append(cost_B)
         return cost_B
     

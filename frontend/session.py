@@ -74,6 +74,14 @@ def record_recent_session(path) -> None:
 # (q0=A2, q1=A1, q2=B2, q3=B1) that qubit_mapping below gets translated into.
 ROLES = ("A1", "A2", "B1", "B2")
 
+# Default initial value for every variational angle. Not 0: the cost is
+# even in the angles (C(x) == C(-x)), so all-zero angles are a stationary
+# point at every beta, the correct answer at beta -> 0 but a saddle at
+# beta > 0. Optimizers started exactly there often never leave it (COBYLA
+# only escapes by shot-noise luck, Nelder-Mead never does). 0.1 is the
+# start gibbs_tfd_reproduction/experiment.py uses.
+DEFAULT_START_ANGLE = 0.1
+
 
 @dataclass
 class SessionConfig:
@@ -84,10 +92,10 @@ class SessionConfig:
 
     # Initial guess for the variational optimizer, not fixed final angles —
     # minimize_cost() adjusts these during the run (see frontend/setup.py).
-    gamma1: float = 0.0
-    gamma2: float = 0.0
-    alpha1: float = 0.0
-    alpha2: float = 0.0
+    gamma1: float = DEFAULT_START_ANGLE
+    gamma2: float = DEFAULT_START_ANGLE
+    alpha1: float = DEFAULT_START_ANGLE
+    alpha2: float = DEFAULT_START_ANGLE
 
     # role -> physical qubit index, e.g. {"A1": 1, "A2": 0, "B1": 3, "B2": 2}.
     # None / incomplete until the user finishes the device panel on Setup.
@@ -121,9 +129,9 @@ class SessionConfig:
             beta=float(data.get("beta", 1.0)),
             optimizer=str(data.get("optimizer", "COBYLA")),
             iterations=int(data.get("iterations", 200)),
-            gamma1=float(data.get("gamma1", 0.0)),
-            gamma2=float(data.get("gamma2", 0.0)),
-            alpha1=float(data.get("alpha1", 0.0)),
-            alpha2=float(data.get("alpha2", 0.0)),
+            gamma1=float(data.get("gamma1", DEFAULT_START_ANGLE)),
+            gamma2=float(data.get("gamma2", DEFAULT_START_ANGLE)),
+            alpha1=float(data.get("alpha1", DEFAULT_START_ANGLE)),
+            alpha2=float(data.get("alpha2", DEFAULT_START_ANGLE)),
             qubit_mapping=data.get("qubit_mapping"),
         )
