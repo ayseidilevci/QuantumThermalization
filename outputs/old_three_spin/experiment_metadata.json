@@ -1,0 +1,23 @@
+{
+  "varsigma": 2.05,
+  "p_layers": 1,
+  "betas": [
+    1.0
+  ],
+  "backend_name": "Starmon-7",
+  "ideal_simulator": true,
+  "mode": "ideal_local_statevector_sampling",
+  "shots_per_setting": null,
+  "tomography_settings": 27,
+  "number_of_qubits": 6,
+  "subsystem_A_qubits": [
+    0,
+    1,
+    2
+  ],
+  "subsystem_B_qubits": [
+    3,
+    4,
+    5
+  ]
+}

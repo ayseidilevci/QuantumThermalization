@@ -52,11 +52,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from qiskit.quantum_info import DensityMatrix, Pauli, Statevector, partial_trace, state_fidelity
 
-from cost_function_3spin import CostFunction3Spin
-from tfd_circuit_3spin import TFD3SpinCircuit
+from .cost_function_3spin import CostFunction3Spin
+from .tfd_circuit_3spin import TFD3SpinCircuit
 
 
-PAPER_BETAS = (0.001, 0.01, 0.1, 1.0, 5.0)
+PAPER_BETAS = (1.0, 2.5, 5.0, 7.5, 10)
 print(f"paper betas {PAPER_BETAS}\n")
 SIGMA_VALUES = (1.0, 1.57)
 N_QUBITS = 6
@@ -449,7 +449,6 @@ def write_outputs(all_results, betas, output_dir: Path, p_layers: int, maxiter: 
             linewidth=1.5,
             label=fr"$\varsigma={varsigma:g}$",
         )
-    ax.set_xscale("log")
     ax.set_xlabel(r"Inverse temperature $\beta$")
     ax.set_ylabel(r"Per-$\beta$ contribution to $\Xi(\varsigma)$")
     ax.set_title(r"Three-spin cost-function validation: $\Xi$ contributions")
@@ -467,7 +466,6 @@ def write_outputs(all_results, betas, output_dir: Path, p_layers: int, maxiter: 
             linewidth=1.5,
             label=fr"$\varsigma={varsigma:g}$",
         )
-    ax.set_xscale("log")
     ax.set_ylim(0.0, 1.02)
     ax.set_xlabel(r"Inverse temperature $\beta$")
     ax.set_ylabel(r"Reduced-state fidelity $F(\rho_A,\rho_\beta)$")
@@ -486,7 +484,6 @@ def write_outputs(all_results, betas, output_dir: Path, p_layers: int, maxiter: 
             linewidth=1.5,
             label=fr"$\varsigma={varsigma:g}$",
         )
-    ax.set_xscale("log")
     ax.set_ylim(0.0, 1.02)
     ax.set_xlabel(r"Inverse temperature $\beta$")
     ax.set_ylabel(r"Full-state fidelity $|\langle\mathrm{TFD}|\Psi\rangle|^2$")
@@ -501,10 +498,6 @@ def write_outputs(all_results, betas, output_dir: Path, p_layers: int, maxiter: 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--quick", action="store_true",
-        help="use five beta values in [0.1, 10] instead of the paper's 17-point grid",
-    )
     parser.add_argument("--p", type=int, default=1, help="number of variational layers (default: 1)")
     parser.add_argument("--maxiter", type=int, default=200, help="COBYLA iteration limit per beta")
     parser.add_argument("--rhobeg", type=float, default=0.5, help="initial COBYLA trust-region radius")
@@ -517,7 +510,7 @@ def main():
     if args.maxiter < 1:
         parser.error("--maxiter must be >= 1")
 
-    betas = QUICK_BETAS if args.quick else PAPER_BETAS
+    betas = (1.0, 2.5, 5.0, 7.5, 10)
     h_eigendecomposition = three_spin_hamiltonian(g=1.0, periodic=False)
 
     print("=== Three-spin / six-qubit cost-function validation ===")

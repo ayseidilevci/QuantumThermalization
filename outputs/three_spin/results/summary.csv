@@ -1,0 +1,4 @@
+beta,varsigma,final_cost,exact_spectral_lower_bound,termwise_lower_bound,evaluations,optimizer_success,optimizer_message,ideal_statevector_gibbs_fidelity,tomography_gibbs_fidelity,tomography_infidelity,tomography_trace_distance,shots_per_setting,backend
+1e-06,2.05,-11971573889813.25,-11971573889813.238,-11971573889827.45,17,True,Return from COBYLA because the trust region radius reaches its lower bound.,0.9999999999987497,0.9902441758621207,0.009755824137879343,0.0829725619256364,4096,QX emulator
+1.0,2.05,-9.884275363562228,-11.969900226973353,-20.2,34,True,Return from COBYLA because the trust region radius reaches its lower bound.,0.6816089385278626,0.695864575449277,0.30413542455072295,0.4616254055490962,4096,QX emulator
+5.0,2.05,-5.504389269825369,-9.853672696000539,-14.42144340030174,26,True,Return from COBYLA because the trust region radius reaches its lower bound.,0.2765742715370638,0.25777053108091624,0.7422294689190838,0.8017045448399254,4096,QX emulator

@@ -2,7 +2,7 @@ import numpy as np
 from qiskit.quantum_info import Pauli, SparsePauliOp
 from scipy.optimize import minimize
 
-from tfd_circuit_3spin import TFD3SpinCircuit
+from .tfd_circuit_3spin import TFD3SpinCircuit
 
 class CostFunction3Spin:
     """Engineered C_varsigma(beta) cost for the 3-spin / 6-qubit ansatz.
