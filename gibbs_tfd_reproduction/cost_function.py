@@ -19,7 +19,7 @@ import numpy as np
 from tomography import plot_density_matrix
 
 
-from tomography import build_tomography_circuit, reconstruct_density_matrix
+from tomography import build_tomography_circuit, reconstruct_density_matrix, log_raw_result, wait_for_result
 # q0 = A2
 # q1 = A1
 # q2 = B2
@@ -27,13 +27,17 @@ from tomography import build_tomography_circuit, reconstruct_density_matrix
 
 class CostFunction:
     def __init__(self, varsigma=1.57, backend=None, initial_layout=(0,2,3,5), subsystem_qubits=(0,1),
-                 tomography=True, results_dir="results", run_tag=None):
+                 tomography=True, results_dir="results", run_tag=None, shots=8192,
+                 raw_log_path=None):
         # tomography=False skips the per-evaluation 9-setting tomography (and
         # its live PNG): on a noisy simulator it costs several times more than
         # the cost circuit itself, so callers that only need the cost value
         # can turn it off and run tomography.run_tomography when they want it.
         self.varsigma = varsigma
         self.tomography = tomography
+        self.shots = shots
+        # if set, every job's raw counts + job id are appended here (JSONL)
+        self.raw_log_path = raw_log_path
         self.backend = backend
         self.initial_layout = list(initial_layout)
         self.ro_matrices = None
@@ -54,7 +58,7 @@ class CostFunction:
         self.run_tag = run_tag or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_path = os.path.join(self.results_dir, f"progress_{self.run_tag}.jsonl")
 
-    def cost_function(self, params, beta):
+    def _build_cost_circuit(self, params):
         gamma1, gamma2, alpha1, alpha2 = params
 
         qc_cost = QuantumCircuit(4, 16)
@@ -79,7 +83,23 @@ class CostFunction:
         qc_cost.barrier()
         for q in range(4): qc_cost.measure(q, 12+q)
 
-        qc_cost_t = transpile(qc_cost, self.backend, initial_layout=self.initial_layout)
+        return transpile(qc_cost, self.backend, initial_layout=self.initial_layout)
+
+    def _run(self, circuits, meta=None):
+        job = self.backend.run(circuits, shots=self.shots, memory=True)
+        result = wait_for_result(job, f"cost job ({len(circuits)} circuit{'s' if len(circuits) > 1 else ''})")
+        # A failed experiment on Quantum Inspire comes back as an empty
+        # result rather than an exception -- raise so callers can retry.
+        if not result.success:
+            raise RuntimeError(f"job failed: {getattr(result, 'system_messages', '')}")
+        if self.raw_log_path is not None:
+            log_raw_result(self.raw_log_path, job, circuits, result, {"kind": "cost", **(meta or {})})
+        return result
+
+    def cost_function(self, params, beta):
+        gamma1, gamma2, alpha1, alpha2 = params
+
+        qc_cost_t = self._build_cost_circuit(params)
         circuits = [qc_cost_t]
         if self.tomography:
             qc_tomo, settings = build_tomography_circuit(gamma1, gamma2, alpha1, alpha2,
@@ -87,10 +107,38 @@ class CostFunction:
             qc_tomo_t = transpile(qc_tomo, self.backend, initial_layout=self.initial_layout)
             circuits.append(qc_tomo_t)
 
-        job = self.backend.run(circuits, shots=8192, memory=True)
-        result = job.result()
+        result = self._run(circuits)
+        cost_B = self._cost_from_result(qc_cost_t, result, 0, params, beta)
 
-        raw_cost = get_raw_data(qc_cost_t, result, circuit_nr=0)
+        if self.tomography:
+            raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
+            counts_tomo = get_multi_counts(raw_tomo, 4)
+            probs_tomo = get_multi_probs(counts_tomo)
+            tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
+                                 for p in probs_tomo[:9]]
+            rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
+            self.tomography_history.append(rho)
+
+            os.makedirs("plots", exist_ok=True)
+            plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
+                         save_path=f"plots/tomography_live_beta{beta}.png")
+
+        return cost_B
+
+    def cost_function_batch(self, params_list, beta):
+        """Evaluate several parameter sets in ONE job (no tomography). On
+        hardware every job waits in the queue, so batching e.g. SPSA's +/-
+        pair halves the number of waits."""
+        circuits = [self._build_cost_circuit(p) for p in params_list]
+        result = self._run(circuits, {"beta": beta,
+                                      "params": [np.asarray(p, dtype=float).tolist() for p in params_list]})
+        return [self._cost_from_result(qc_t, result, i, p, beta)
+                for i, (qc_t, p) in enumerate(zip(circuits, params_list))]
+
+    def _cost_from_result(self, qc_cost_t, result, circuit_nr, params, beta):
+        gamma1, gamma2, alpha1, alpha2 = params
+
+        raw_cost = get_raw_data(qc_cost_t, result, circuit_nr=circuit_nr)
         counts_cost = get_multi_counts(raw_cost, 4)
         probs_cost = get_multi_probs(counts_cost)
         x_probs, z_probs, calib0, calib1 = probs_cost[0], probs_cost[1], counts_cost[2], counts_cost[3]
@@ -133,19 +181,6 @@ class CostFunction:
             f"cost={cost_B:+.5f}",
             flush=True,
         )
-
-        if self.tomography:
-            raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
-            counts_tomo = get_multi_counts(raw_tomo, 4)
-            probs_tomo = get_multi_probs(counts_tomo)
-            tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
-                                 for p in probs_tomo[:9]]
-            rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
-            self.tomography_history.append(rho)
-
-            os.makedirs("plots", exist_ok=True)
-            plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
-                         save_path=f"plots/tomography_live_beta{beta}.png")
 
         self.cost_history.append(cost_B)
         return cost_B

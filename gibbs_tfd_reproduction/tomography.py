@@ -28,6 +28,67 @@ from matplotlib.colors import Normalize
 N_QUBITS = 4
 PAULIS = ["X", "Y", "Z"]
 
+# Seconds to wait for a job's result; None = wait as long as it takes.
+# Quantum Inspire's job.result() gives up after 60 s by default, and giving up
+# on a queued job only makes the caller resubmit a duplicate behind it -- so
+# queued jobs are waited for indefinitely; only real errors trigger a retry.
+JOB_TIMEOUT = None
+
+
+def wait_for_result(job, label="job"):
+    """job.result(), but printing every status change (queued -> running ->
+    done) with a timestamp, so a long hardware wait isn't a frozen screen."""
+    from datetime import datetime
+    from qiskit.providers import JobStatus
+    import time as _time
+    start, last, poll = _time.time(), None, 1.0
+    print(f"  [{datetime.now():%H:%M:%S}] {label} submitted, id {_job_id(job)}", flush=True)
+    while JOB_TIMEOUT is None or _time.time() - start < JOB_TIMEOUT:
+        try:
+            status = job.status()
+        except Exception as exc:  # a status-query hiccup shouldn't kill the wait
+            status = f"status unavailable ({exc})"
+        if status != last:
+            name = getattr(status, "name", status)
+            print(f"  [{datetime.now():%H:%M:%S}] {label}: {name}"
+                  f"  (+{_time.time() - start:.0f}s)", flush=True)
+            last = status
+        if status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED):
+            break
+        _time.sleep(poll)
+        poll = min(poll * 2, 15.0)
+    return job.result(timeout=JOB_TIMEOUT)
+
+
+def _job_id(job):
+    # QIJob's job_id() is empty; its id is batch_job_id (set on submit)
+    for get in (lambda: job.batch_job_id, lambda: job.job_id(),
+                lambda: job.circuits_run_data[0].job_id):
+        try:
+            value = get()
+            if value not in (None, ""):
+                return str(value)
+        except Exception:
+            pass
+    return None
+
+
+def log_raw_result(path, job, circuits, result, meta):
+    """Append one JSON line with the job id and, per circuit, the counts of
+    every 4-bit measurement block -- enough to redo any analysis later
+    (other readout correction, MLE tomography, error bars)."""
+    import json
+    from datetime import datetime
+    blocks = []
+    for i, qc in enumerate(circuits):
+        raw = get_raw_data(qc, result, circuit_nr=i if len(circuits) > 1 else None)
+        blocks.append(get_multi_counts(raw, N_QUBITS))
+    record = {"timestamp": datetime.now().isoformat(timespec="seconds"),
+              "job_id": _job_id(job), "backend": getattr(result, "backend_name", None),
+              **meta, "block_counts": blocks}
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
 def extract_ro_matrices(counts_prep0: dict, counts_prep1: dict, num_qubits: int = N_QUBITS):
     shots0, shots1 = sum(counts_prep0.values()), sum(counts_prep1.values())
     ro_matrices = {}
@@ -79,12 +140,19 @@ def build_tomography_circuit(gamma1, gamma2, alpha1, alpha2, subsystem_qubits=(0
 
 
 def run_tomography(backend, initial_layout, gamma1, gamma2, alpha1, alpha2,
-                    subsystem_qubits=(0, 1), shots=8192, ro_matrices=None):
+                    subsystem_qubits=(0, 1), shots=8192, ro_matrices=None,
+                    raw_log_path=None, meta=None):
     qc, settings = build_tomography_circuit(gamma1, gamma2, alpha1, alpha2, subsystem_qubits)
     qc_t = transpile(qc, backend, initial_layout=initial_layout)
 
     job = backend.run(qc_t, shots=shots, memory=True)
-    result = job.result()
+    result = wait_for_result(job, f"tomography job{' (' + meta['label'] + ')' if meta and 'label' in meta else ''}")
+    if not result.success:
+        raise RuntimeError(f"job failed: {getattr(result, 'system_messages', '')}")
+    if raw_log_path is not None:
+        log_raw_result(raw_log_path, job, [qc_t], result,
+                       {"kind": "tomography", "params": [gamma1, gamma2, alpha1, alpha2],
+                        "settings": settings, **(meta or {})})
 
     raw = get_raw_data(qc_t, result)
     counts = get_multi_counts(raw, N_QUBITS)
