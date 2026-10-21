@@ -1,0 +1,53 @@
+{
+ "gamma_cz": 0.03085309354318717,
+ "p_1q": 8.187465330202644e-17,
+ "readout": [
+  0.037387847900390625,
+  0.0305938720703125
+ ],
+ "couplers": {
+  "2-4": {
+   "p_depol": 3.806654859755559e-12,
+   "cphase": 0.15385841696072217,
+   "phase": {
+    "2": -0.08977418083516965,
+    "4": 0.0018977164159411394
+   }
+  },
+  "2-5": {
+   "p_depol": 0.05064196503720255,
+   "cphase": -0.10235768545361698,
+   "phase": {
+    "2": 0.11503800566131897,
+    "5": -0.0004115356767830469
+   }
+  },
+  "4-8": {
+   "p_depol": 0.03221810933831982,
+   "cphase": -0.01156219038973929,
+   "phase": {
+    "4": -0.04556625162128252,
+    "8": 0.06807857525244386
+   }
+  },
+  "5-8": {
+   "p_depol": 1.8533773637279395e-14,
+   "cphase": -0.15502707833303997,
+   "phase": {
+    "5": -0.23911018495726677,
+    "8": 0.03826651030614433
+   }
+  }
+ },
+ "unmeasured": {
+  "p_depol": 0.020715018594836886,
+  "phase_rms": 0.10990999595921708
+ },
+ "rms_rho_all": 0.023917483311408617,
+ "rms_rho_held_out": {
+  "coherent": 0.02990949397200762,
+  "uniform": 0.038179235300206435
+ },
+ "source": "parallel_20261019_175824 (34 tomographies, Tuna-17 qubits [2, 4, 5, 8])",
+ "model": "per CZ: coherent phase error (conditional + single-qubit) then per-coupler depolarizing, then amplitude damping on both qubits; per rx/ry: depolarizing; uniform readout; unmeasured couplers: mean depolarizing, random phases with the fitted rms"
+}

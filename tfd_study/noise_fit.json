@@ -1,0 +1,321 @@
+{
+ "p_cz": 0.023,
+ "p_1q": 0.00115,
+ "gamma_cz": 0.027,
+ "readout": [
+  0.037387847900390625,
+  0.0305938720703125
+ ],
+ "rms_fid_purity": 0.0419,
+ "rms_depolarizing_only": 0.0426,
+ "source": "parallel_20261019_175824 (34 tomographies, Tuna-17 qubits [2, 4, 5, 8])",
+ "model": "per CZ: depolarizing + amplitude damping on both qubits; per rx/ry: depolarizing; uniform over qubits; readout from the run's calibration",
+ "per_state": [
+  {
+   "label": "reference_start/beta=1e-08/A",
+   "beta": 1e-08,
+   "measured_fid": 0.9307858686098869,
+   "model_fid": 0.9996619984795061,
+   "ideal_fid": 0.9999999983444301,
+   "measured_purity": 0.31500529191449445,
+   "model_purity": 0.2503379220608369
+  },
+  {
+   "label": "reference_start/beta=1e-08/B",
+   "beta": 1e-08,
+   "measured_fid": 0.9294020565518305,
+   "model_fid": 0.9996164194679362,
+   "ideal_fid": 0.9999999983444301,
+   "measured_purity": 0.3182721562242241,
+   "model_purity": 0.25038361288943395
+  },
+  {
+   "label": "reference_start/beta=0.5/A",
+   "beta": 0.5,
+   "measured_fid": 0.9543830597666039,
+   "model_fid": 0.9834160224849245,
+   "ideal_fid": 0.9973088212366353,
+   "measured_purity": 0.39734299479775237,
+   "model_purity": 0.3296523214686833
+  },
+  {
+   "label": "reference_start/beta=0.5/B",
+   "beta": 0.5,
+   "measured_fid": 0.9387899546827758,
+   "model_fid": 0.9864683582145453,
+   "ideal_fid": 0.9973088212366342,
+   "measured_purity": 0.3624039702803511,
+   "model_purity": 0.34098336789031136
+  },
+  {
+   "label": "reference_start/beta=1/A",
+   "beta": 1.0,
+   "measured_fid": 0.9286524486971325,
+   "model_fid": 0.9359090899951744,
+   "ideal_fid": 0.9927354857581752,
+   "measured_purity": 0.4784026919164394,
+   "model_purity": 0.4343637210634328
+  },
+  {
+   "label": "reference_start/beta=1/B",
+   "beta": 1.0,
+   "measured_fid": 0.9196009227024367,
+   "model_fid": 0.9438054160027047,
+   "ideal_fid": 0.9927354857581756,
+   "measured_purity": 0.4476384334331375,
+   "model_purity": 0.45232673889720343
+  },
+  {
+   "label": "reference_start/beta=5/A",
+   "beta": 5.0,
+   "measured_fid": 0.6962572045111051,
+   "model_fid": 0.7530403592544577,
+   "ideal_fid": 0.987026880446034,
+   "measured_purity": 0.595785303068667,
+   "model_purity": 0.5589594205207198
+  },
+  {
+   "label": "reference_start/beta=5/B",
+   "beta": 5.0,
+   "measured_fid": 0.7370256548347593,
+   "model_fid": 0.7721816846155702,
+   "ideal_fid": 0.9870268804460332,
+   "measured_purity": 0.5589790171564577,
+   "model_purity": 0.5854255844756632
+  },
+  {
+   "label": "replica0/beta=1e-08/A",
+   "beta": 1e-08,
+   "measured_fid": 0.9806300805558524,
+   "model_fid": 0.9957085224636254,
+   "ideal_fid": 0.9939186249595772,
+   "measured_purity": 0.26845881208012057,
+   "model_purity": 0.25430201159813964
+  },
+  {
+   "label": "replica0/beta=1e-08/B",
+   "beta": 1e-08,
+   "measured_fid": 0.9758781826613268,
+   "model_fid": 0.997756260927805,
+   "ideal_fid": 0.9939186249595767,
+   "measured_purity": 0.2735336243924774,
+   "model_purity": 0.2522474775446657
+  },
+  {
+   "label": "replica1/beta=1e-08/A",
+   "beta": 1e-08,
+   "measured_fid": 0.9596839367679869,
+   "model_fid": 0.9931822754818358,
+   "ideal_fid": 0.9827986078285998,
+   "measured_purity": 0.28983581497704763,
+   "model_purity": 0.2567588401092671
+  },
+  {
+   "label": "replica1/beta=1e-08/B",
+   "beta": 1e-08,
+   "measured_fid": 0.9725461057154778,
+   "model_fid": 0.9912687715365216,
+   "ideal_fid": 0.9827986078286001,
+   "measured_purity": 0.2773828866585714,
+   "model_purity": 0.2589880591191077
+  },
+  {
+   "label": "replica2/beta=1e-08/A",
+   "beta": 1e-08,
+   "measured_fid": 0.9221489008242364,
+   "model_fid": 0.9971494230319645,
+   "ideal_fid": 0.9947425705817481,
+   "measured_purity": 0.3235625308560146,
+   "model_purity": 0.2528531275185303
+  },
+  {
+   "label": "replica2/beta=1e-08/B",
+   "beta": 1e-08,
+   "measured_fid": 0.9412934775881501,
+   "model_fid": 0.9949362703187657,
+   "ideal_fid": 0.9947425705817481,
+   "measured_purity": 0.30582373310579447,
+   "model_purity": 0.25506901217394473
+  },
+  {
+   "label": "replica3/beta=1e-08/A",
+   "beta": 1e-08,
+   "measured_fid": 0.9870805871561784,
+   "model_fid": 0.9965727005609092,
+   "ideal_fid": 0.9939110661969659,
+   "measured_purity": 0.2639872748372848,
+   "model_purity": 0.2534454966945806
+  },
+  {
+   "label": "replica3/beta=1e-08/B",
+   "beta": 1e-08,
+   "measured_fid": 0.9837611100165534,
+   "model_fid": 0.9965380118460873,
+   "ideal_fid": 0.9939110661969648,
+   "measured_purity": 0.2670782139170585,
+   "model_purity": 0.25347018329947824
+  },
+  {
+   "label": "replica0/beta=0.5/A",
+   "beta": 0.5,
+   "measured_fid": 0.8913727948823235,
+   "model_fid": 0.9067930175484389,
+   "ideal_fid": 0.9449876036097576,
+   "measured_purity": 0.28531093530408025,
+   "model_purity": 0.26350313331364683
+  },
+  {
+   "label": "replica0/beta=0.5/B",
+   "beta": 0.5,
+   "measured_fid": 0.9014204432448311,
+   "model_fid": 0.9038480399213267,
+   "ideal_fid": 0.9449876036097588,
+   "measured_purity": 0.28849632841889405,
+   "model_purity": 0.26521666141708417
+  },
+  {
+   "label": "replica1/beta=0.5/A",
+   "beta": 0.5,
+   "measured_fid": 0.9328508429625455,
+   "model_fid": 0.9434632650198908,
+   "ideal_fid": 0.9652014959094072,
+   "measured_purity": 0.3011640299994276,
+   "model_purity": 0.2863364486920417
+  },
+  {
+   "label": "replica1/beta=0.5/B",
+   "beta": 0.5,
+   "measured_fid": 0.916698684857328,
+   "model_fid": 0.931436859839989,
+   "ideal_fid": 0.9652014959094065,
+   "measured_purity": 0.3000758847032393,
+   "model_purity": 0.27663291622407365
+  },
+  {
+   "label": "replica2/beta=0.5/A",
+   "beta": 0.5,
+   "measured_fid": 0.9266638184908819,
+   "model_fid": 0.9828779056673113,
+   "ideal_fid": 0.9899788071201899,
+   "measured_purity": 0.3740998257505443,
+   "model_purity": 0.3480274960819863
+  },
+  {
+   "label": "replica2/beta=0.5/B",
+   "beta": 0.5,
+   "measured_fid": 0.9668085115338836,
+   "model_fid": 0.983693254524545,
+   "ideal_fid": 0.9899788071201899,
+   "measured_purity": 0.36106625723483454,
+   "model_purity": 0.35990231972285747
+  },
+  {
+   "label": "replica3/beta=0.5/A",
+   "beta": 0.5,
+   "measured_fid": 0.9407337302247716,
+   "model_fid": 0.9659154506670874,
+   "ideal_fid": 0.9831052571804135,
+   "measured_purity": 0.35761466932870223,
+   "model_purity": 0.317876287563621
+  },
+  {
+   "label": "replica3/beta=0.5/B",
+   "beta": 0.5,
+   "measured_fid": 0.931645308814148,
+   "model_fid": 0.969542002804619,
+   "ideal_fid": 0.9831052571804137,
+   "measured_purity": 0.32007934791757736,
+   "model_purity": 0.3306816057014944
+  },
+  {
+   "label": "replica0/beta=1/A",
+   "beta": 1.0,
+   "measured_fid": 0.9264139800979623,
+   "model_fid": 0.9245293804653075,
+   "ideal_fid": 0.9963542772126492,
+   "measured_purity": 0.48500374873735846,
+   "model_purity": 0.4052987015955391
+  },
+  {
+   "label": "replica0/beta=1/B",
+   "beta": 1.0,
+   "measured_fid": 0.9030495752574362,
+   "model_fid": 0.9154162718250638,
+   "ideal_fid": 0.996354277212649,
+   "measured_purity": 0.45789973752948154,
+   "model_purity": 0.3904980286102958
+  },
+  {
+   "label": "replica1/beta=1/A",
+   "beta": 1.0,
+   "measured_fid": 0.9218849541903069,
+   "model_fid": 0.9252813144643933,
+   "ideal_fid": 0.9485393593797917,
+   "measured_purity": 0.5021947468020697,
+   "model_purity": 0.48458289754595074
+  },
+  {
+   "label": "replica1/beta=1/B",
+   "beta": 1.0,
+   "measured_fid": 0.8357971918223754,
+   "model_fid": 0.918785183281259,
+   "ideal_fid": 0.9485393593797928,
+   "measured_purity": 0.4637261086293434,
+   "model_purity": 0.46159203722687575
+  },
+  {
+   "label": "replica2/beta=1/A",
+   "beta": 1.0,
+   "measured_fid": 0.8718009632938412,
+   "model_fid": 0.9407818233046817,
+   "ideal_fid": 0.9856378816586421,
+   "measured_purity": 0.44375209621137157,
+   "model_purity": 0.46554126510721094
+  },
+  {
+   "label": "replica2/beta=1/B",
+   "beta": 1.0,
+   "measured_fid": 0.9275342807108788,
+   "model_fid": 0.9466323084896786,
+   "ideal_fid": 0.9856378816586419,
+   "measured_purity": 0.43230217292448275,
+   "model_purity": 0.4825374151982236
+  },
+  {
+   "label": "replica3/beta=1/A",
+   "beta": 1.0,
+   "measured_fid": 0.8806378400146262,
+   "model_fid": 0.8996089710926931,
+   "ideal_fid": 0.8671906242108699,
+   "measured_purity": 0.6095732299600107,
+   "model_purity": 0.5217546287742055
+  },
+  {
+   "label": "replica3/beta=1/B",
+   "beta": 1.0,
+   "measured_fid": 0.827468135520289,
+   "model_fid": 0.8945142130882966,
+   "ideal_fid": 0.8671906242108703,
+   "measured_purity": 0.49296683431261384,
+   "model_purity": 0.499679878737608
+  },
+  {
+   "label": "replica0/beta=5/A",
+   "beta": 5.0,
+   "measured_fid": 0.7657744321527068,
+   "model_fid": 0.7379328784393571,
+   "ideal_fid": 0.9788510593644753,
+   "measured_purity": 0.6022438150795013,
+   "model_purity": 0.540307209163401
+  },
+  {
+   "label": "replica0/beta=5/B",
+   "beta": 5.0,
+   "measured_fid": 0.6275577020094406,
+   "model_fid": 0.7200138570544228,
+   "ideal_fid": 0.9788510593644761,
+   "measured_purity": 0.5281211603501346,
+   "model_purity": 0.5174951732469786
+  }
+ ]
+}
