@@ -1,0 +1,6 @@
+n=3 p=1 varsigma=1.57 layout=[2, 4, 7, 5, 8, 11]
+beta    reference F_A/F_B    replicas F_A mean +- std (k)   F_B          angles without noise
+0.5     0.946/0.941        -
+1       0.838/0.832        -
+2       0.711/0.728        -
+5       0.609/0.635        -
