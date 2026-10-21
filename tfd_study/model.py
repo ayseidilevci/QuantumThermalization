@@ -11,9 +11,9 @@ Ansatz: |Phi+>^n followed by p layers of
     U = exp(-i a2 ZZ_AB/2) exp(-i a1 XX_AB/2) exp(-i g2 (ZZ_A+ZZ_B)/2) exp(-i g1 (X_A+X_B)/2)
 which for n = 2, p = 1 is exactly gibbs_tfd_reproduction/tfd_circuit.py.
 
-Loss (engineered, Sagastizabal Eq. S1, rescaled so it is O(1) at every beta):
-    L(beta) = [beta^s (g<X_A+X_B> + s<ZZ_A+ZZ_B>) - <H_AB>] / (1 + beta^s)
-Same minimiser as C_s; at beta = 0 it is -<H_AB>. Every term is a product of
+Loss (the engineered cost of Sagastizabal et al., Eq. S1, unscaled):
+    C_s(beta) = g<X_A+X_B> + s<ZZ_A+ZZ_B> - beta^(-s) <H_AB>
+At beta = 0 it is the limit -<H_AB> (same minimiser). Every term is a product of
 X's or of Z's, so two measurement settings (all-Z, all-X) give the loss for any n.
 
 Fidelity: `fidelity` is qiskit's state_fidelity, F = (Tr sqrt(sqrt(r) s sqrt(r)))^2,
@@ -188,8 +188,10 @@ def loss_terms(pz, px, n):
 
 
 def loss(terms, beta, s, g=G_FIELD):
-    w = beta ** s
-    return (w * (g * terms["X"] + s * terms["ZZ"]) - terms["HAB"]) / (1.0 + w)
+    """The paper's C_s(beta); at beta = 0 the limit -<H_AB>, which has the same minimiser."""
+    if beta == 0:
+        return -terms["HAB"]
+    return g * terms["X"] + s * terms["ZZ"] - beta ** (-s) * terms["HAB"]
 
 
 def tomography_rho(probs_by_setting, n, system="A"):

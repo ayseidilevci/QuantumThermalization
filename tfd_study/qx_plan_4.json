@@ -1,0 +1,37 @@
+{
+ "note": "4+4 TFD plan of hardware_plan_4.json on Quantum Inspire's QX emulator (noiseless, all-to-all): qubits 0..7, 2048 shots (the emulator's maximum). Run with: python -m tfd_study.run_hardware --config tfd_study/qx_plan_4.json",
+ "run": {
+  "backend": "QX emulator",
+  "n": 4,
+  "p": 1,
+  "varsigma": 1.57,
+  "betas": [
+   0.5,
+   1.0,
+   2.0,
+   5.0
+  ],
+  "layout": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "replicas": 1,
+  "iters": 40,
+  "calibrate": 3,
+  "first_step": 0.3,
+  "n_kicks": 8,
+  "kick": 0.4,
+  "seed": 0,
+  "shots_cost": 2048,
+  "shots_tomo": 2048,
+  "cal_interval": 30,
+  "max_inflight": 4,
+  "reference_end": true
+ }
+}

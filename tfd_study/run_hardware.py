@@ -5,8 +5,9 @@ submissions queued), checkpointing, retries and raw-count logging are those of
 gibbs_tfd_reproduction/run_hardware_parallel.py, imported unchanged. This file
 only supplies the experiment for general n and p:
 
-  * loss: the engineered loss at the re-fitted varsigma, rescaled by
-    1/(1+beta^s) (tfd_study/model.py); 2 circuits per parameter point (all-Z,
+  * loss: the paper's engineered cost C_s(beta) (tfd_study/model.py); SPSA's
+    gain calibration makes its steps independent of the cost's scale.
+    2 circuits per parameter point (all-Z,
     all-X), so an SPSA step is 4 circuits = 1 submission
   * replicas of the chain protocol from theta = 0 (Bell pairs). theta = 0 is a
     stationary point, so the first beta starts from the best of n_kicks random
@@ -329,7 +330,9 @@ def self_test(cfg):
     beta = 1.0
     meas = model.loss(model.loss_terms(probs[0], probs[1], n), beta, cfg["varsigma"])
     exact = model.exact_loss(th, n, p, beta, cfg["varsigma"])
-    ok = abs(meas - exact) < 0.02
+    # Shot-noise bound: every Pauli term has std <= 1/sqrt(shots); sum of |coefficients| of C_s
+    s = cfg["varsigma"]
+    ok = abs(meas - exact) < (2 * n + 2 * (n - 1) * s + 2 * n * beta ** -s) / np.sqrt(100000)
     print(f"loss measured {meas:+.4f}  exact {exact:+.4f}")
     by = dict(zip(model.tomography_settings(n), probs[2:]))
     for system, ex in (("A", model.exact_rho_A(n, p, th)), ("B", model.exact_rho_B(n, p, th))):
@@ -398,6 +401,8 @@ def main():
         log("computing the noiseless-optimal reference angles ...")
         cfg["reference_angles"] = reference_angles(cfg["n"], cfg["p"], cfg["varsigma"], cfg["betas"])
         tag = f"tfd-sim-{args.simulate}" if args.simulate else "tfd-dryrun" if args.dry_run else "tfd"
+        if mode == "hardware" and cfg["backend"] != "Tuna-17":      # e.g. QX emulator -> tfd-qx-emulator
+            tag += "-" + cfg["backend"].lower().replace(" ", "-")
         run_dir = ROOT / "results" / f"{tag}_n{cfg['n']}p{cfg['p']}_{datetime.now():%Y%m%d_%H%M%S}"
         run_dir.mkdir(parents=True, exist_ok=True)
         state = {"cfg": cfg}
