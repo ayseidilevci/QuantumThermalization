@@ -1,0 +1,2 @@
+backend,beta,varsigma,p_layers,optimizer,shots_per_cost_circuit,objective,nfev,nit,optimizer_success,optimizer_message,parameters,physical_layout,readout_mitigation,readout_calibration_runs
+QX emulator,1.0,2.05,1,COBYLA,2048,-11.295556640625,33,-1,True,Return from COBYLA because the trust region radius reaches its lower bound.,"[-0.3030962302544496, -0.3799269653776467, 0.849824187499659, 2.3412936746632504]","[0, 2, 5, 1, 4, 8]",False,0

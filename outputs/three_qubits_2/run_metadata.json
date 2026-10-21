@@ -1,0 +1,93 @@
+{
+  "backend": "QX emulator",
+  "backend_mode": "Quantum Inspire QI backend; QX emulator is a simulator, Tuna-17 is hardware",
+  "layout_logical_to_physical": {
+    "q0": 0,
+    "q1": 2,
+    "q2": 5,
+    "q3": 1,
+    "q4": 4,
+    "q5": 8
+  },
+  "layout_description": "q0=A1 -> Q0, q1=A2 -> Q2, q2=A3 -> Q5, q3=B1 -> Q1, q4=B2 -> Q4, q5=B3 -> Q8",
+  "logical_two_qubit_edges": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      3,
+      4
+    ],
+    [
+      4,
+      5
+    ],
+    [
+      0,
+      3
+    ],
+    [
+      1,
+      4
+    ],
+    [
+      2,
+      5
+    ]
+  ],
+  "physical_two_qubit_edges": [
+    [
+      0,
+      2
+    ],
+    [
+      2,
+      5
+    ],
+    [
+      1,
+      4
+    ],
+    [
+      4,
+      8
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      2,
+      4
+    ],
+    [
+      5,
+      8
+    ]
+  ],
+  "p_layers": 1,
+  "parameters_per_layer": 4,
+  "betas": [
+    1.0,
+    5.0
+  ],
+  "varsigma": 2.05,
+  "optimizer": "COBYLA",
+  "shots": 2048,
+  "maxiter": 100,
+  "optimization_level": 1,
+  "readout_mitigation": false,
+  "calibration_shots": 512,
+  "calibration_interval": 10,
+  "tomography": true,
+  "tomography_shots": 2048,
+  "expectation_measurement_bases": [
+    "X",
+    "Z"
+  ]
+}

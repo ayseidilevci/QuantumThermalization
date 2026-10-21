@@ -40,16 +40,12 @@ class CostFunction3Spin:
         "ZZ_BA": ("ZIIZII", "IZIIZI", "IIZIIZ"),    # Z1aZ1b + Z2aZ2b + Z3aZ3b
     }
 
-    def __init__(self, varsigma=1.57, p_layers=1, periodic=False):
+    def __init__(self, varsigma=2.05, p_layers=1, periodic=False):
         self.varsigma = float(varsigma)
         self.p_layers = int(p_layers)
         self.periodic = bool(periodic)
         self.cost_history = []
         self.parameter_history = []
-
-    @staticmethod
-    def _expectation(state, pauli_string):
-        return float(np.real(state.expectation_value(Pauli(pauli_string))))
 
     def expectation_values(self, params):
         state = TFD3SpinCircuit(
@@ -62,6 +58,73 @@ class CostFunction3Spin:
             name: sum(self._expectation(state, s) for s in strings)
             for name, strings in self.OBSERVABLES.items()
         }
+
+    @staticmethod
+    def _expectation(state, pauli_string):
+        return float(np.real(state.expectation_value(Pauli(pauli_string))))
+
+    def minimize_cost(
+        self,
+        x0,
+        beta,
+        method="COBYLA",
+        maxiter=200,
+        rhobeg=0.5,
+        tol=0.02,
+        callback=None,
+    ):
+        """Minimize the cost using COBYLA or Nelder-Mead."""
+
+        self.cost_history = []
+        self.parameter_history = []
+
+        method = method.strip().lower().replace("_", "-")
+
+        methods = {
+            "cobyla": "COBYLA",
+            "nelder-mead": "Nelder-Mead",
+            "neldermead": "Nelder-Mead",
+        }
+
+        if method not in methods:
+            raise ValueError(
+                "Unsupported optimizer. Choose 'COBYLA' or 'Nelder-Mead'."
+            )
+
+        method = methods[method]
+        x0 = np.asarray(x0, dtype=float)
+
+        expected_parameters = 4 * self.p_layers
+        if x0.shape != (expected_parameters,):
+            raise ValueError(
+                f"Expected {expected_parameters} initial parameters for "
+                f"p_layers={self.p_layers}, but received {x0.size}."
+            )
+
+        if method == "COBYLA":
+            options = {
+                "maxiter": int(maxiter),
+                "rhobeg": float(rhobeg),
+                "tol": float(tol),
+            }
+        else:
+            options = {
+                "maxiter": int(maxiter),
+                "xatol": float(tol),
+                "fatol": float(tol),
+            }
+
+        result = minimize(
+            self.cost_function,
+            x0=x0,
+            args=(beta,),
+            method=method,
+            options=options,
+            callback=callback,
+        )
+
+        return result
+
 
     def cost_function(self, params, beta):
         values = self.expectation_values(params)
@@ -81,45 +144,6 @@ class CostFunction3Spin:
         self.cost_history.append(cost)
         self.parameter_history.append(np.asarray(params, dtype=float).copy())
         return cost
-
-    def minimize_cost(
-        self,
-        x0,
-        beta,
-        method="COBYLA",
-        maxiter=200,
-        rhobeg=0.5,
-        tol=0.02,
-        callback=None,
-    ):
-        self.cost_history = []
-        self.parameter_history = []
-
-        if method != "COBYLA":
-            raise ValueError("This first 3-spin experiment currently expects COBYLA")
-
-        result = minimize(
-            self.cost_function,
-            x0=np.asarray(x0, dtype=float),
-            args=(beta,),
-            method=method,
-            options={
-                "maxiter": int(maxiter),
-                "rhobeg": float(rhobeg),
-                "tol": float(tol),
-            },
-            callback=callback,
-        )
-        return result
-
-    @staticmethod
-    def _cost_terms(varsigma):
-        return [
-            ("IIIIIX", 1.0), ("IIIIXI", 1.0), ("IIIXII", 1.0),
-            ("IIXIII", 1.0), ("IXIIII", 1.0), ("XIIIII", 1.0),
-            ("IIIIZZ", varsigma), ("IIZZII", varsigma),
-            ("IZZIII", varsigma), ("ZZIIII", varsigma),
-        ]
 
     @staticmethod
     def cost_lower_bound(beta, varsigma=1.57, periodic=False):
