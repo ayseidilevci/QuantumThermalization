@@ -21,6 +21,41 @@ def default_subsystem_hamiltonian():
     H = np.kron(_Z, _Z) + np.kron(_X, _I) + np.kron(_I, _X)
     return np.linalg.eigh(H)
 
+def default_three_spin_subsystem_hamiltonian(g=1.0, periodic=False):
+    """
+    3-spin transverse-field Ising Hamiltonian.
+
+    Open chain:
+        H = Z1 Z2 + Z2 Z3 + g (X1 + X2 + X3)
+
+    If periodic=True:
+        H = Z1 Z2 + Z2 Z3 + Z3 Z1
+            + g (X1 + X2 + X3)
+    """
+    # Z1 Z2 = Z ⊗ Z ⊗ I
+    ZZ_12 = np.kron(np.kron(_Z, _Z),_I)
+    
+    # Z2 Z3 = I ⊗ Z ⊗ Z
+    ZZ_23 = np.kron(np.kron(_I, _Z),_Z)
+
+    # X1 = X ⊗ I ⊗ I
+    X_1 = np.kron(np.kron(_X, _I),_I)
+
+    # X2 = I ⊗ X ⊗ I
+    X_2 = np.kron(np.kron(_I, _X),_I)
+
+    # X3 = I ⊗ I ⊗ X
+    X_3 = np.kron(np.kron(_I, _I),_X)
+
+    H = ZZ_12 + ZZ_23 + g * (X_1 + X_2 + X_3)
+
+    if periodic:
+        # Z3 Z1 = Z ⊗ I ⊗ Z
+        ZZ_31 = np.kron(np.kron(_Z, _I),_Z)
+
+        H += ZZ_31
+
+    return np.linalg.eigh(H)
 
 class GibbsState:
     def __init__(self, H):
@@ -28,16 +63,25 @@ class GibbsState:
 
     def gibbs_density_matrix(self, beta):
         Z = 0
+
         eigen_values, eigen_vectors = self.H
         eigen_values = eigen_values - eigen_values.min()
-        sigma = np.zeros((4, 4), dtype=complex)
+        dim = len(eigen_values)
+        sigma = np.zeros((dim, dim), dtype=complex)
+
         for j in range(len(eigen_values)):
             vector = eigen_vectors[:, j]
-            weight = np.exp(-beta*eigen_values[j])
-            sigma +=  weight * np.outer(vector, vector.conj())
+            weight = np.exp(-beta * eigen_values[j])
+
+            sigma += weight * np.outer(
+                vector,
+                vector.conj()
+            )
+
             Z += weight
-        p = sigma / Z
-        return p
+
+        return sigma / Z
+
 
 class TFDState:
     def __init__(self, H_A, H_B):
@@ -48,17 +92,27 @@ class TFDState:
         Z = 0
         eigen_values_A, eigen_vectors_A = self.H_A
         eigen_values_B, eigen_vectors_B = self.H_B
+
+        # Energy shifts do not change the normalized Gibbs state
         eigen_values_A = eigen_values_A - eigen_values_A.min()
         eigen_values_B = eigen_values_B - eigen_values_B.min()
 
-        sigma = np.zeros((16), dtype=complex)
-        for j in range(len(eigen_values_A)):
+        dim_A = len(eigen_values_A)
+        dim_B = len(eigen_values_B)
+        if dim_A != dim_B:
+            raise ValueError(
+                "TFD requires A and B to have the same Hilbert-space dimension."
+            )
+
+        # A has dimension 8, B has dimension 8:
+        # |TFD> lives in H_B ⊗ H_A, dimension 8*8 = 64.
+        sigma = np.zeros(dim_A * dim_B, dtype=complex)
+
+        for j in range(dim_A):
             vector_A = eigen_vectors_A[:, j]
             vector_B = eigen_vectors_B[:, j]
-            weight = np.exp(-beta*eigen_values_A[j]/2)
-            sigma += weight * np.kron(vector_B, vector_A)
+            weight = np.exp(-beta * eigen_values_A[j] / 2)
+            sigma += weight * np.kron(vector_B,vector_A)
             Z += weight**2
-        state_tfd = sigma / np.sqrt(Z)
-        return state_tfd
 
-
+        return sigma / np.sqrt(Z)

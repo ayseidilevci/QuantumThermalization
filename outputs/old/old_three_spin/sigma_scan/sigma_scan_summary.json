@@ -1,0 +1,40 @@
+{
+  "system": "three spins per subsystem; six qubits total",
+  "ansatz_depth_p": 1,
+  "parameters_per_layer": 4,
+  "betas": [
+    0.1,
+    0.5623413251903491,
+    1.0,
+    1.7782794100389228,
+    10.0
+  ],
+  "sigmas": [
+    1.0,
+    1.3,
+    1.57,
+    1.8,
+    2.0,
+    5.0,
+    7.5,
+    10.0
+  ],
+  "maxiter": 60,
+  "metric_definition": "Xi_total = sum_beta sum_15_observables |<O>_exact_TFD - <O>_optimized_state|",
+  "mode": "ideal_statevector; no finite-shot or hardware noise",
+  "best_sigma_by_minimum_total_Xi_on_this_grid": {
+    "varsigma": 1.57,
+    "Xi_total": 8.93205810516714,
+    "mean_Xi_beta": 1.786411621033428,
+    "mean_Gibbs_fidelity": 0.9730903873209948,
+    "mean_full_TFD_fidelity": 0.9530554880074525
+  },
+  "best_sigma_by_maximum_mean_Gibbs_fidelity_on_this_grid": {
+    "varsigma": 1.57,
+    "Xi_total": 8.93205810516714,
+    "mean_Xi_beta": 1.786411621033428,
+    "mean_Gibbs_fidelity": 0.9730903873209948,
+    "mean_full_TFD_fidelity": 0.9530554880074525
+  },
+  "note": "Grid optima depend on the optimizer, warm-start path, beta grid and p=1 ansatz; they are not universal constants."
+}

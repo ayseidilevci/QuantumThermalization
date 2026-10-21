@@ -1,0 +1,28 @@
+{
+  "p_layers": 1,
+  "parameters_per_layer": 4,
+  "shots_per_setting": 4096,
+  "num_pauli_settings": 27,
+  "betas": [
+    0.001,
+    0.01,
+    0.1,
+    1.0,
+    5.0
+  ],
+  "seed": 1234,
+  "mode": "ideal_statevector_sampled_counts",
+  "warning": "This is shot-based ideal simulation, not hardware tomography; it includes sampling noise only.",
+  "per_sigma": {
+    "1.0": {
+      "mean_fidelity": 0.9701586451223128,
+      "mean_trace_distance": 0.12137608063331426,
+      "max_trace_distance": 0.2390190426752159
+    },
+    "1.57": {
+      "mean_fidelity": 0.9778026038941476,
+      "mean_trace_distance": 0.10310569138934773,
+      "max_trace_distance": 0.1590794707614409
+    }
+  }
+}

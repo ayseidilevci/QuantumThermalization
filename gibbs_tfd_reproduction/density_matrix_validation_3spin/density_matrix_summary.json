@@ -1,0 +1,38 @@
+{
+  "p_layers": 1,
+  "parameters_per_layer": 4,
+  "betas": [
+    0.001,
+    0.01,
+    0.1,
+    1.0,
+    5.0
+  ],
+  "plotted_betas": [
+    0.001,
+    0.01,
+    0.1,
+    1.0,
+    5.0
+  ],
+  "maxiter": 200,
+  "sigma_results": {
+    "1.0": {
+      "mean_gibbs_fidelity": 0.9767018747645931,
+      "mean_trace_distance": 0.09734548392934919,
+      "max_trace_distance": 0.23437255317983857,
+      "mean_max_abs_matrix_element_difference": 0.03889202124031457
+    },
+    "1.57": {
+      "mean_gibbs_fidelity": 0.9848340886754186,
+      "mean_trace_distance": 0.07850340551807403,
+      "max_trace_distance": 0.15485968433081082,
+      "mean_max_abs_matrix_element_difference": 0.03237875241365225
+    }
+  },
+  "interpretation": {
+    "gibbs_fidelity": "Squared Uhlmann fidelity between reduced rho_A and exact rho_beta; 1 is perfect.",
+    "trace_distance": "One-half trace norm of rho_A-rho_beta; 0 is perfect and larger is more distinguishable.",
+    "matrix_difference": "Elementwise absolute value of complex matrix difference |rho_A-rho_beta|."
+  }
+}

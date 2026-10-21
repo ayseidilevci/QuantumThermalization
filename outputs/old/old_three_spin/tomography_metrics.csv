@@ -1,0 +1,2 @@
+beta,varsigma,p_layers,final_cost,evaluations,optimizer_success,gibbs_fidelity,gibbs_infidelity,trace_distance,ideal_statevector_gibbs_fidelity,shots_per_setting,number_of_settings,mode
+1.0,2.05,1,-11.914150013937011,46,True,0.931048290430182,0.068951709569818,0.15484564390223005,0.9846997434478679,512,27,ideal_local_statevector_sampling
