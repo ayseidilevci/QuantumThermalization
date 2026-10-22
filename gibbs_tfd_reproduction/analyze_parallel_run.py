@@ -95,10 +95,10 @@ def main():
                 ax.errorbar(i, np.mean(vals), yerr=np.std(vals) if len(vals) > 1 else None,
                             fmt="o", ms=8, color=BLUE, capsize=5, lw=2, zorder=3,
                             label=f"SPSA from 0.1, replicas: mean ± std" if i == 0 else None)
-            for key, mk, face, lab in (("ref_start", "s", ORANGE, "reference: simulator angles (start)"),
-                                       ("ref_end", "s", "none", "reference: simulator angles (end)")):
+            for key, dx, face, lab in (("ref_start", 0.24, ORANGE, "reference: simulator angles (start)"),
+                                       ("ref_end", 0.38, "none", "reference: simulator angles (end)")):
                 if r[key]:
-                    ax.scatter(i + 0.28, r[key][system]["fid"], marker=mk, s=60, facecolors=face,
+                    ax.scatter(i + dx, r[key][system]["fid"], marker="s", s=60, facecolors=face,
                                edgecolors=ORANGE, linewidths=2, zorder=3, label=lab)
             if system == "A" and r["beta"] in prev:
                 ax.scatter(i - 0.28, prev[r["beta"]]["fid_final"], marker="D", s=55, color=AQUA,
