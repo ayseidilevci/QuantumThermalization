@@ -6,8 +6,9 @@ angles (start of the run) and rho_A measured after SPSA (one replica), each with
 fidelity to the Gibbs state. The Gibbs state is real, so each title also gives the largest
 |Im rho_ij| (the phase information the colour no longer shows).
 
-    python -m tfd_study.plot_manhattan results/tfd_n3p1_<tag> [--replica 0]
-Writes <run>/manhattan_beta_<beta>.png and <run>/manhattan_all.png.
+    python -m tfd_study.plot_manhattan results/tfd_n3p1_<tag> [--replica 0] [--paper]
+Writes <run>/manhattan_beta_<beta>.png and <run>/manhattan_all.png. With --paper the fidelities are
+in the paper's convention F = Tr sqrt(...) (the square root of qiskit's) and the files end in _paper.
 """
 
 import argparse
@@ -34,12 +35,13 @@ def label(r, text):
     return text + "\n" + rf"max $|\mathrm{{Im}}\,\rho_{{ij}}|$ = {np.abs(r.imag).max():.3f}"
 
 
-def panels(state, beta, replica):
+def panels(state, beta, replica, paper=False):
     n, tomo = state["cfg"]["n"], state["exp"]["tomo"]
     ref, rep = tomo[f"reference_start/beta={beta}"], tomo[f"replica{replica}/beta={beta}"]
+    f = (lambda t: np.sqrt(t["A"]["fid"])) if paper else (lambda t: t["A"]["fid"])
     return [(model.gibbs_state(n, beta), r"Exact Gibbs state $\rho_\beta$"),
-            (rho(ref), rf"Tuna-17, reference angles: $F={ref['A']['fid']:.3f}$"),
-            (rho(rep), rf"Tuna-17, SPSA (replica {replica}): $F={rep['A']['fid']:.3f}$")]
+            (rho(ref), rf"Tuna-17, reference angles: $F={f(ref):.3f}$"),
+            (rho(rep), rf"Tuna-17, SPSA (run {replica + 1}): $F={f(rep):.3f}$")]
 
 
 def plot_bars(ax, r, title, norm):
@@ -79,6 +81,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir", type=Path)
     ap.add_argument("--replica", type=int, default=0)
+    ap.add_argument("--paper", action="store_true", help="fidelity in the paper's convention Tr sqrt(...)")
     args = ap.parse_args()
     state = json.loads((args.run_dir / "state.json").read_text())
     cfg = state["cfg"]
@@ -87,11 +90,11 @@ def main():
     for b in betas:
         fig = plt.figure(figsize=(20, 7), constrained_layout=True)
         axes = [fig.add_subplot(1, 3, k + 1, projection="3d") for k in range(3)]
-        norm = draw_row(fig, axes, panels(state, b, args.replica), n)
+        norm = draw_row(fig, axes, panels(state, b, args.replica, args.paper), n)
         magnitude_colorbar(fig, axes, norm)
         fig.suptitle(rf"{n}+{n} Gibbs-state tomography on Tuna-17: $\beta={b:g}$, $\varsigma={s:g}$, p = {cfg['p']}",
                      fontsize=15)
-        out = args.run_dir / f"manhattan_beta_{b:g}.png"
+        out = args.run_dir / f"manhattan_beta_{b:g}{'_paper' if args.paper else ''}.png"
         fig.savefig(out, dpi=150)
         plt.close(fig)
         print(f"wrote {out}")
@@ -99,11 +102,11 @@ def main():
     fig = plt.figure(figsize=(20, 6.2 * len(betas)), constrained_layout=True)
     axes = [fig.add_subplot(len(betas), 3, k + 1, projection="3d") for k in range(3 * len(betas))]
     for i, b in enumerate(betas):
-        row = [(r, rf"$\beta={b:g}$: " + t) for r, t in panels(state, b, args.replica)]
+        row = [(r, rf"$\beta={b:g}$: " + t) for r, t in panels(state, b, args.replica, args.paper)]
         norm = draw_row(fig, axes[3 * i:3 * i + 3], row, n)
     magnitude_colorbar(fig, axes, norm)
     fig.suptitle(rf"{n}+{n} on Tuna-17, $\varsigma={s:g}$, p = {cfg['p']}: exact vs measured $\rho_A$", fontsize=16)
-    out = args.run_dir / "manhattan_all.png"
+    out = args.run_dir / f"manhattan_all{'_paper' if args.paper else ''}.png"
     fig.savefig(out, dpi=110)
     plt.close(fig)
     print(f"wrote {out}")
