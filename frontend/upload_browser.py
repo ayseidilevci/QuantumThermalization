@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from backend.experiment_manager import ExperimentManager, ExperimentRecord
 from frontend.colors import Colors
-from frontend.session import SessionConfig, format_beta
+from frontend.session import SessionConfig, format_beta, roles
 from frontend.upload import load_session_dialog
 
 
@@ -50,7 +50,9 @@ def _describe(record: ExperimentRecord) -> tuple[str, list, str]:
     title = f"{when}  ·  {record.backend_name}"
 
     beta = settings.get("beta")
+    n = int(settings.get("n_spins", 2))
     params = [
+        f"{n}+{n} qubits",
         f"β={format_beta(beta)}" if isinstance(beta, (int, float)) else None,
         settings.get("optimizer"),
         f"{settings['iterations']} iter" if "iterations" in settings else None,
@@ -58,7 +60,7 @@ def _describe(record: ExperimentRecord) -> tuple[str, list, str]:
     mapping = settings.get("qubit_mapping")
     if isinstance(mapping, dict) and mapping:
         params.append("qubits " + " ".join(
-            f"{role}→{mapping[role]}" for role in ("A1", "A2", "B1", "B2") if role in mapping))
+            f"{role}→{mapping[role]}" for role in roles(n) if role in mapping))
 
     outcome = []
     if isinstance(results.get("fidelity"), (int, float)):

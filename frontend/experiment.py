@@ -46,7 +46,6 @@ from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity, Pauli
 
 from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
-from gibbs_tfd_reproduction.ground_truth import GibbsState, default_subsystem_hamiltonian
 
 import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent / "gibbs_tfd_reproduction"))
@@ -55,11 +54,13 @@ from qi_utilities.device_simulation.simulators import NoisySimulator
 
 from backend import starmon7
 from backend.spsa import spsa_minimize
+from backend.ladder_tfd import LadderTFD, loss_lower_bound
+from tfd_study import model as tfd_model
 from backend.experiment_manager import PROJECTS_PATH, write_experiment_settings
 from frontend.colors import Colors
 from frontend.session import (
     SessionConfig, DEFAULT_START_ANGLE, HARDWARE_OPTIMIZER, format_beta, format_temperature,
-    random_start_angles,
+    random_start_angles, roles,
 )
 from frontend.upload import save_session_dialog
 from frontend.plots import MplCanvas, style_axes, panel
@@ -197,6 +198,24 @@ class OptimizationWorker(QObject):
                                wait_for_result=self._wait_for_hardware_job)
         return cost_fn, max_circuits
 
+    def _make_ladder(self, local: bool) -> LadderTFD:
+        """3+3 / 4+4: the n+n experiment of tfd_study, on the device itself."""
+        config, n = self.config, self.config.n_spins
+        if local:
+            raise ValueError(f"{n}+{n} qubits needs Tuna-17; the Starmon-7 emulator has 7 qubits")
+        if not config.is_qubit_mapping_complete():
+            raise ValueError(f"assign all {2 * n} qubits on the Setup screen first")
+        layout = ([config.qubit_mapping[f"A{i}"] for i in range(1, n + 1)]
+                  + [config.qubit_mapping[f"B{i}"] for i in range(1, n + 1)])
+        backend = self.manager.get_backend(config.backend_name)
+
+        def wait(job, purpose):
+            self._job_purpose = purpose
+            return self._wait_for_hardware_job(job)
+
+        return LadderTFD(n, backend, layout, wait,
+                         backend.get_backend_type().max_jobs_per_batch_job)
+
     def _wait_for_hardware_job(self, job):
         """Poll a submitted hardware job until its results are in, reporting
         each state change (job_update) and honouring Stop. Replaces
@@ -302,15 +321,23 @@ class OptimizationWorker(QObject):
         # end: the true Gibbs state depends only on beta, not on the
         # optimizer's current guess, so the live fidelity trace below and
         # the final result further down can share this one reference.
+        n = config.n_spins
         try:
-            target = DensityMatrix(
-                GibbsState(default_subsystem_hamiltonian()).gibbs_density_matrix(config.beta))
+            target = DensityMatrix(tfd_model.gibbs_state(n, config.beta))
         except Exception as exc:
             self.log.emit(f"Couldn't compute the true Gibbs state: {exc}")
             target = None
 
+        # 2+2: Sagastizabal et al.'s circuits (CostFunction). 3+3 / 4+4: the
+        # n+n generalisation (LadderTFD), whose fidelity is measured once, by
+        # tomography at the end: 3^n settings each iteration would be 6 or 17
+        # extra jobs per step.
+        ladder = cost_fn = max_circuits = None
         try:
-            cost_fn, max_circuits = self._make_cost_function(local)
+            if n == 2:
+                cost_fn, max_circuits = self._make_cost_function(local)
+            else:
+                ladder = self._make_ladder(local)
         except Exception as exc:
             self.log.emit(f"Couldn't set up {config.backend_name}: {exc}")
             self.finished.emit({"aborted": True, "error": str(exc)})
@@ -320,6 +347,9 @@ class OptimizationWorker(QObject):
                 f"Every cost evaluation runs on {config.backend_name}: one job per "
                 f"iteration, each waiting in the device's queue. Follow them in the "
                 f"Hardware jobs tab.")
+        if ladder is not None:
+            self.log.emit(f"{n}+{n} qubits on {ladder.layout}: the fidelity is measured "
+                          f"by tomography at the end ({3 ** n} circuits).")
 
         # The live density-matrix preview is by far the most expensive thing
         # to redraw (a full 3D bar plot + colorbar rebuild, ~20-100ms each),
@@ -366,12 +396,12 @@ class OptimizationWorker(QObject):
                 self.progress.emit(iteration[0], float(current_cost))
             fid = None
             try:
-                if iteration[0] % rho_every == 0:
-                    self.rho_progress.emit(rho_a)
-                tgt = DensityMatrix(
-                    GibbsState(default_subsystem_hamiltonian()).gibbs_density_matrix(current_beta[0]))
-                fid = state_fidelity(DensityMatrix(rho_a), tgt, validate=False)
-                self.fidelity_progress.emit(iteration[0], float(fid))
+                if rho_a is not None:
+                    if iteration[0] % rho_every == 0:
+                        self.rho_progress.emit(rho_a)
+                    tgt = DensityMatrix(tfd_model.gibbs_state(n, current_beta[0]))
+                    fid = state_fidelity(DensityMatrix(rho_a), tgt, validate=False)
+                    self.fidelity_progress.emit(iteration[0], float(fid))
             except Exception:
                 pass  # a live preview glitch shouldn't kill the optimization
 
@@ -431,6 +461,16 @@ class OptimizationWorker(QObject):
                 report(current, current_cost, rho_a)
             return [cost for cost, _ in out[:len(points)]]
 
+        def ladder_batch(points, current, beta):
+            """3+3 / 4+4: SPSA's probe points only (2 circuits each, so a step
+            is one job); the live cost is the mean of the two probe losses,
+            since measuring the iterate too would need a second job."""
+            purpose = "SPSA calibration" if current is None else f"Iteration {iteration[0] + 1}"
+            losses = ladder.losses(points, beta, purpose)
+            if current is not None:
+                report(current, float(np.mean(losses)), None)
+            return losses
+
         self.log.emit(
             f"Starting optimization  |  beta={config.beta}  optimizer={optimizer}")
 
@@ -440,7 +480,11 @@ class OptimizationWorker(QObject):
                 self.step.emit(b)
                 self.log.emit(f"Optimizing at beta={b}")
                 evaluations.clear()
-                if optimizer == "SPSA":
+                if ladder is not None:
+                    result = spsa_minimize(
+                        lambda points, current, b=b: ladder_batch(points, current, b), x0,
+                        maxiter=config.iterations, callback=spsa_callback)
+                elif optimizer == "SPSA":
                     result = spsa_minimize(
                         lambda points, current, b=b: spsa_batch(points, current, b), x0,
                         maxiter=config.iterations, callback=spsa_callback)
@@ -456,9 +500,12 @@ class OptimizationWorker(QObject):
                     )
                 x0 = result.x
             final_params = result.x
-            self._job_purpose = "Final state"
-            final_cost, rho_final = cost_fn.evaluate_batch(
-                [final_params], config.beta, tomography_for=(0,))[0]
+            if ladder is not None:
+                rho_final, final_cost = ladder.tomography(final_params, config.beta, "Final tomography")
+            else:
+                self._job_purpose = "Final state"
+                final_cost, rho_final = cost_fn.evaluate_batch(
+                    [final_params], config.beta, tomography_for=(0,))[0]
             final_cost = float(final_cost)
         except _Aborted:
             self.log.emit(f"Aborted. Progress up to this point is saved in {self.live_log_path}")
@@ -470,7 +517,6 @@ class OptimizationWorker(QObject):
             self.finished.emit({"aborted": True, "error": str(exc)})
             return
 
-        final_circuit = TFDCircuit(*final_params)
 
         # How good the prepared state actually is, not just how low the
         # (engineered, proxy) cost got: fidelity against the true Gibbs
@@ -493,9 +539,13 @@ class OptimizationWorker(QObject):
         # finished.emit below instead of crashing on an unbound name.
         real_counts = None
         try:
-            backend = self.manager.get_backend(config.backend_name) if local else cost_fn.backend
-            initial_layout = [config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
-            qc = final_circuit.as_qiskit_circuit()
+            if ladder is not None:
+                backend, initial_layout = ladder.backend, ladder.layout
+                qc = ladder.counts_circuit(final_params)
+            else:
+                backend = self.manager.get_backend(config.backend_name) if local else cost_fn.backend
+                initial_layout = [config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
+                qc = TFDCircuit(*final_params).as_qiskit_circuit()
             # Always measure, for every backend -- local or real. This used
             # to be gated behind `if local:`, on the belief that only the
             # local emulator needed it; in fact TFDCircuit.as_qiskit_circuit()
@@ -507,10 +557,11 @@ class OptimizationWorker(QObject):
             # register (not measure_all()'s "meas") is what the local
             # emulator specifically needs; it's also perfectly fine for a
             # real backend, so one code path now covers both.
-            measured = QuantumCircuit(qc.num_qubits, qc.num_qubits)
-            measured.compose(qc, inplace=True)
-            measured.measure(range(qc.num_qubits), range(qc.num_qubits))
-            qc = measured
+            if ladder is None:   # LadderTFD's counts circuit is already measured
+                measured = QuantumCircuit(qc.num_qubits, qc.num_qubits)
+                measured.compose(qc, inplace=True)
+                measured.measure(range(qc.num_qubits), range(qc.num_qubits))
+                qc = measured
             transpiled = transpile(qc, backend, initial_layout=initial_layout)
             self._job_purpose = "Final counts"
             job, job_results = self.manager.submit_circuit(
@@ -599,6 +650,7 @@ class ExperimentWindow(QWidget):
         self._graphs = {}
         self._tab_pages = {}
         self._hardware = False
+        self._spins = 2
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -626,7 +678,7 @@ class ExperimentWindow(QWidget):
         self.recap_form = QFormLayout()
         self.recap_form.setVerticalSpacing(6)
         self._recap_labels = {}
-        for key in ("Backend", "β", "Optimizer", "Max iterations", "γ, α (initial)", "Qubits"):
+        for key in ("Backend", "System", "β", "Optimizer", "Max iterations", "γ, α (initial)", "Qubits"):
             lbl = QLabel("–")
             lbl.setWordWrap(True)
             lbl.setStyleSheet(f"color: {Colors.TEXT};")
@@ -737,7 +789,7 @@ class ExperimentWindow(QWidget):
         params_row.setContentsMargins(16, 8, 16, 8)
         params_row.setSpacing(28)
         self._param_strip_labels = {}
-        for key in ("Backend", "β", "Optimizer", "Max iterations", "Qubits"):
+        for key in ("Backend", "System", "β", "Optimizer", "Max iterations", "Qubits"):
             lbl = QLabel()
             lbl.setTextFormat(Qt.RichText)
             lbl.setText(f"<span style='color:{Colors.TEXT_DIM};'>{key}</span>&nbsp;&nbsp;–")
@@ -883,6 +935,7 @@ class ExperimentWindow(QWidget):
         if known is not None and config.qubit_mapping:
             self.qubit_view.set_topology(
                 len(known["coords"]), {frozenset(p) for p in known["edges"]}, known["coords"])
+            self.qubit_view.set_spins(config.n_spins)
             self.qubit_view.set_assignment(config.qubit_mapping)
             self.qubit_view.show()
         else:
@@ -895,8 +948,7 @@ class ExperimentWindow(QWidget):
             [config.gamma1, config.gamma2, config.alpha1, config.alpha2])
 
         try:
-            self._target_rho = DensityMatrix(
-                GibbsState(default_subsystem_hamiltonian()).gibbs_density_matrix(config.beta)).data
+            self._target_rho = tfd_model.gibbs_state(config.n_spins, config.beta)
         except Exception as exc:
             self._on_log(f"Couldn't compute the true Gibbs state: {exc}")
             self._target_rho = None
@@ -962,6 +1014,7 @@ class ExperimentWindow(QWidget):
         measured counts take the full row, and the reference density matrix
         is labelled as the exact target it is."""
         self._hardware = hardware
+        self._spins = self.config.n_spins
         ideal_counts_card = self._graphs["ideal_counts"][3]
         real_counts_card = self._graphs["real_counts"][3]
         self._grid.removeWidget(real_counts_card)
@@ -979,6 +1032,8 @@ class ExperimentWindow(QWidget):
         self._set_card_title("ideal", "Target density matrix (exact Gibbs state)")
         self._set_card_title("loss", f"Measured cost on {self.config.backend_name} (live)"
                              if hardware else "Cost function (live)")
+        self._set_card_title("fidelity", "Fidelity to target (tomography at the end)"
+                             if self._spins > 2 else "Fidelity to target (live)")
         self.jobs_view.clear()
         jobs_index = self.tabs.indexOf(self.jobs_view)
         if hardware:
@@ -1093,12 +1148,15 @@ class ExperimentWindow(QWidget):
             f"α₁={config.alpha1:.2f}  α₂={config.alpha2:.2f}" if local
             else "random (cold start)")
         mapping = config.qubit_mapping or {}
-        qubits = "  ".join(f"{role}→q{mapping[role]}" for role in ("A1", "A2", "B1", "B2")
+        n = config.n_spins
+        self._recap_labels["System"].setText(f"{n}+{n} qubits")
+        qubits = "  ".join(f"{role}→q{mapping[role]}" for role in roles(n)
                            if role in mapping) or "–"
         self._recap_labels["Qubits"].setText(qubits)
 
         strip_values = {
             "Backend": config.backend_name,
+            "System": f"{n}+{n}",
             "β": beta_text,
             "Optimizer": optimizer,
             "Max iterations": str(config.iterations),
@@ -1212,9 +1270,10 @@ class ExperimentWindow(QWidget):
         if self._hardware and self.config is not None:
             # Raw cost as measured on the device; the exact minimum is only
             # a reference line.
-            self._loss_line.set_label("Measured cost C")
+            self._loss_line.set_label("Measured cost C" if self._spins == 2
+                                      else "Measured cost C (mean of SPSA's ± probes)")
             style_axes(ax, xlabel="Iteration", ylabel="Cost C (measured)")
-            self._loss_bound = CostFunction.cost_lower_bound(self.config.beta)
+            self._loss_bound = loss_lower_bound(self._spins, self.config.beta)
             ax.axhline(self._loss_bound, color=Colors.GOOD, linestyle="--", linewidth=1.8,
                        label="Theoretical minimum")
         else:
@@ -1281,7 +1340,8 @@ class ExperimentWindow(QWidget):
         self.fidelity_canvas.draw_idle()
 
     def _draw_empty_density(self):
-        self._render_density(self.rho_canvas, np.eye(4, dtype=complex) / 4,
+        dim = 2 ** self._spins
+        self._render_density(self.rho_canvas, np.eye(dim, dtype=complex) / dim,
                              title=r"$\rho_A$  (waiting for first estimate)", zmax=self._density_zmax())
 
     def _draw_density(self, rho: np.ndarray):
@@ -1298,7 +1358,8 @@ class ExperimentWindow(QWidget):
     def _draw_ideal_density(self):
         self._ideal_zmax = self._density_zmax()
         if self._target_rho is None:
-            rho, title = np.eye(4, dtype=complex) / 4, r"$\rho_A^{\mathrm{ideal}}$  (unavailable)"
+            dim = 2 ** self._spins
+            rho, title = np.eye(dim, dtype=complex) / dim, r"$\rho_A^{\mathrm{ideal}}$  (unavailable)"
         else:
             rho, title = self._target_rho, r"$\rho_A^{\mathrm{ideal}} = e^{-\beta H} / Z$"
         self._render_density(self.ideal_rho_canvas, rho, title=title, zmax=self._ideal_zmax)
@@ -1399,13 +1460,19 @@ class ExperimentWindow(QWidget):
         colors = _PHASE_CMAP(norm_phase)
         ax.bar3d(xpos, ypos, np.zeros_like(heights), 0.7, 0.7, heights,
                   color=colors, shade=True, edgecolor=Colors.BG_1, linewidth=0.6)
-        labels = ["00", "01", "10", "11"][:n]
+        bits = max(1, (n - 1).bit_length())
+        # Every basis state up to 8x8; every 4th at 16x16, where all of them overlap.
+        step = 4 if n > 8 else 1
+        labels = [format(i, f"0{bits}b") if i % step == 0 else "" for i in range(n)]
         ax.set_xticks(np.arange(n) + 0.35); ax.set_xticklabels(labels)
         ax.set_yticks(np.arange(n) + 0.35); ax.set_yticklabels(labels)
+        if n > 4:
+            ax.tick_params(axis="x", labelsize=6 if n > 8 else 7)
+            ax.tick_params(axis="y", labelsize=6 if n > 8 else 7)
         ax.set_zlim(0, zmax)
         # Few, short z ticks so they don't run into each other or the label.
         ax.zaxis.set_major_locator(MaxNLocator(nbins=4))
-        ax.zaxis.set_major_formatter("{x:.1f}")
+        ax.zaxis.set_major_formatter("{x:.1f}" if zmax > 0.5 else "{x:.2f}")
         ax.set_zlabel(r"$|\rho_{ij}|$", labelpad=2, fontsize=10)
         ax.text2D(0.02, 0.98, title, transform=ax.transAxes, fontsize=12,
                    color=Colors.TEXT, va="top")
@@ -1424,7 +1491,14 @@ class ExperimentWindow(QWidget):
         canvas.draw_idle()
 
     def _draw_circuit_for(self, params):
-        qc = TFDCircuit(*params).as_qiskit_circuit()
+        n = self._spins
+        if n == 2:
+            qc = TFDCircuit(*params).as_qiskit_circuit()
+            role_order = _LOGICAL_ROLE_ORDER
+        else:
+            # tfd_study/model.py's n+n ansatz; its qubits are A1..An, B1..Bn.
+            qc = tfd_model.bound_ansatz(n, 1, params)
+            role_order = roles(n)
         self._last_qc = qc
         fig = self.circ_canvas.fig
         fig.clear()
@@ -1449,13 +1523,14 @@ class ExperimentWindow(QWidget):
                 for inst in qc.data
             },
         }
-        # Wires labelled by role instead of q0..q3: one single-qubit register
-        # per role (Qiskit labels a size-1 register by its name alone), in
-        # TFDCircuit's logical order, drawn top-to-bottom as A1 A2 B1 B2.
+        # Wires labelled by role instead of q0, q1, ...: one single-qubit
+        # register per role (Qiskit labels a size-1 register by its name
+        # alone), in the circuit's logical order, drawn top-to-bottom as
+        # A1..An B1..Bn.
         # Only the drawing is relabelled; _last_qc (QASM export) keeps "q".
-        labelled = QuantumCircuit(*(QuantumRegister(1, role) for role in _LOGICAL_ROLE_ORDER))
+        labelled = QuantumCircuit(*(QuantumRegister(1, role) for role in role_order))
         labelled.compose(qc, inplace=True)
-        wire_order = [_LOGICAL_ROLE_ORDER.index(role) for role in ("A1", "A2", "B1", "B2")]
+        wire_order = [role_order.index(role) for role in roles(n)]
         try:
             labelled.draw(output="mpl", ax=ax, style=style, wire_order=wire_order)
         except Exception:

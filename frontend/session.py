@@ -76,6 +76,24 @@ def record_recent_session(path) -> None:
 # (q0=A2, q1=A1, q2=B2, q3=B1) that qubit_mapping below gets translated into.
 ROLES = ("A1", "A2", "B1", "B2")
 
+# Spins per system: n = 2 is the Sagastizabal et al. experiment (2+2 qubits);
+# 3+3 and 4+4 use the n+n generalisation in tfd_study/ (model.py).
+SPIN_CHOICES = (2, 3, 4)
+
+# 3+3 and 4+4 run on Tuna-17 only. By connectivity alone Tuna-9 could host a
+# 3+3 ladder too; it's left out by choice, so this is the one place to change.
+MULTI_SPIN_BACKENDS = ("tuna17",)
+
+
+def roles(n: int) -> tuple:
+    """A1..An, B1..Bn: subsystem A's chain and its mirror B (B_i next to A_i)."""
+    return tuple(f"A{i}" for i in range(1, n + 1)) + tuple(f"B{i}" for i in range(1, n + 1))
+
+
+def spins_allowed(backend_name: str, n: int) -> bool:
+    normalized = "".join(ch for ch in (backend_name or "").lower() if ch.isalnum())
+    return n == 2 or normalized in MULTI_SPIN_BACKENDS
+
 # Default initial value for every variational angle. Not 0: the cost is
 # even in the angles (C(x) == C(-x)), so all-zero angles are a stationary
 # point at every beta, the correct answer at beta -> 0 but a saddle at
@@ -154,6 +172,9 @@ class SessionConfig:
     optimizer: str = "COBYLA"
     iterations: int = 200
 
+    # Spins per system (see SPIN_CHOICES); the ansatz uses 2 * n_spins qubits.
+    n_spins: int = 2
+
     # Initial guess for the variational optimizer, not fixed final angles —
     # minimize_cost() adjusts these during the run (see frontend/setup.py).
     gamma1: float = DEFAULT_START_ANGLE
@@ -167,7 +188,7 @@ class SessionConfig:
 
     def is_qubit_mapping_complete(self) -> bool:
         return self.qubit_mapping is not None and all(
-            role in self.qubit_mapping for role in ROLES
+            role in self.qubit_mapping for role in roles(self.n_spins)
         )
 
     def to_json_dict(self) -> dict:
@@ -178,6 +199,7 @@ class SessionConfig:
             "kb_unit": self.kb_unit,
             "optimizer": self.optimizer,
             "iterations": self.iterations,
+            "n_spins": self.n_spins,
             "gamma1": self.gamma1,
             "gamma2": self.gamma2,
             "alpha1": self.alpha1,
@@ -195,6 +217,7 @@ class SessionConfig:
             kb_unit=str(data.get("kb_unit", DEFAULT_KB_UNIT)),
             optimizer=str(data.get("optimizer", "COBYLA")),
             iterations=int(data.get("iterations", 200)),
+            n_spins=int(data.get("n_spins", 2)),
             gamma1=float(data.get("gamma1", DEFAULT_START_ANGLE)),
             gamma2=float(data.get("gamma2", DEFAULT_START_ANGLE)),
             alpha1=float(data.get("alpha1", DEFAULT_START_ANGLE)),

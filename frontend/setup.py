@@ -10,8 +10,8 @@ from backend import starmon7
 from frontend.colors import Colors
 from frontend.session import (
     SessionConfig, DEFAULT_START_ANGLE, BETA_CHOICES, BETA_ZERO, KB_UNITS,
-    DEFAULT_KB_UNIT, HARDWARE_OPTIMIZER, format_beta, format_temperature,
-    nearest_beta_choice,
+    DEFAULT_KB_UNIT, HARDWARE_OPTIMIZER, SPIN_CHOICES, format_beta, format_temperature,
+    nearest_beta_choice, spins_allowed,
 )
 from frontend.tutorial import TutorialCoach, TutorialStep
 from frontend.device_panel import DevicePanel
@@ -138,7 +138,17 @@ class SetupWindow(QWidget):
         self.iterations.valueChanged.connect(self._update_iterations_note)
         self._update_iterations_note()
 
+        self.spins = QComboBox()
+        for n in SPIN_CHOICES:
+            self.spins.addItem(f"{n}+{n} ({2 * n} qubits)", n)
+        self.spins.currentIndexChanged.connect(self._on_spins_changed)
+        self.spins_note = QLabel()
+        self.spins_note.setWordWrap(True)
+        self.spins_note.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10pt;")
+
         form.addRow("Backend:", self._backend_name_lbl)
+        form.addRow("System size:", self.spins)
+        form.addRow(self.spins_note)
         form.addRow("Inverse temperature β:", self.beta_row)
         form.addRow("Boltzmann constant:", self.kb_unit)
         form.addRow(self.kb_note)
@@ -253,6 +263,16 @@ class SetupWindow(QWidget):
                 "The device you picked on the previous screen: the Starmon-7 emulator "
                 "or a real Tuna device. Use “Change backend” below to pick another."),
             TutorialStep(
+                self.spins, "System size",
+                "How many spins each system has. <b>2 spins</b> (2+2 = 4 qubits) is "
+                "the original experiment and runs on every device. <b>3 spins</b> "
+                "(6 qubits) and <b>4 spins</b> (8 qubits) run on <b>Tuna-17</b> only: "
+                "the ansatz needs a 2 × n ladder of coupled qubits, and Tuna-17 is "
+                "the only device a 4 × 2 ladder fits on.<br><br>"
+                "For 3 and 4 spins the fidelity is measured once, by tomography at "
+                "the end (3<sup>n</sup> = 27 or 81 circuits): too many jobs to repeat "
+                "every iteration."),
+            TutorialStep(
                 self.beta_row, "Inverse temperature β",
                 "The temperature of the Gibbs state you're preparing, as β = 1/(k<sub>B</sub>T) "
                 "in units of 1/g (g is the Hamiltonian's coupling). Choose 0, 0.5, 1, 2, "
@@ -291,11 +311,12 @@ class SetupWindow(QWidget):
                 "angles (each between 0.1 and π in size), shown on the Run screen."),
             TutorialStep(
                 self.device_panel, "Device panel",
-                "Pick subsystem A of the thermofield-double ansatz: drag a line "
-                "from one qubit (A1) to a coupled neighbour (A2), or click them "
-                "one by one. The mirrored subsystem B (B1 next to A1, B2 next to "
-                "A2, B1–B2 coupled) is chosen automatically — or you're told "
-                "it's impossible on this device."),
+                "Pick subsystem A of the thermofield-double ansatz: a chain of "
+                "coupled qubits A1, A2, … (as many as the system size). Drag a "
+                "path through them, or click them one by one; clicking the last "
+                "one again undoes it. The mirrored subsystem B (each B<sub>i</sub> "
+                "next to its A<sub>i</sub>, and the B qubits coupled in a chain) is "
+                "chosen automatically, or you're told it's impossible on this device."),
             TutorialStep(
                 self.start_experiment_btn, "Start Experiment",
                 "Once your qubit assignment is valid, click here to run. The Run "
@@ -365,16 +386,41 @@ class SetupWindow(QWidget):
         self._backend_name_lbl.setText(name)
         self.device_panel.set_backend(name, qi_backend)
         self._real_hardware = not starmon7.is_starmon7(name)
+        self._update_spin_choices()
+        self._apply_hardware_mode()
+
+    def _n_spins(self) -> int:
+        return self.spins.currentData()
+
+    def _update_spin_choices(self):
+        """3+3 and 4+4 need Tuna-17 (see session.spins_allowed): grey the
+        sizes this backend can't run out, and fall back to 2+2 if needed."""
+        model = self.spins.model()
+        for row, n in enumerate(SPIN_CHOICES):
+            model.item(row).setEnabled(spins_allowed(self._backend_name, n))
+        if not spins_allowed(self._backend_name, self._n_spins()):
+            self.spins.setCurrentIndex(SPIN_CHOICES.index(2))
+        if spins_allowed(self._backend_name, max(SPIN_CHOICES)):
+            self.spins_note.setText(
+                "3+3 and 4+4 measure the fidelity once, by tomography at the end "
+                "(27 / 81 circuits).")
+        else:
+            self.spins_note.setText("3+3 and 4+4 run on Tuna-17 only.")
+        self.device_panel.set_spins(self._n_spins())
+
+    def _on_spins_changed(self):
+        self.device_panel.set_spins(self._n_spins())
         self._apply_hardware_mode()
 
     def _apply_hardware_mode(self):
         """Real devices run a cold start from random angles with SPSA (see
         OptimizationWorker.run); lock the controls that don't apply."""
         real = self._real_hardware
+        n = self._n_spins()
         self.hardware_banner.setText(
-            f"<b>Real quantum computer.</b> This experiment will be sent to "
-            f"{self._backend_name}. It runs a cold start at the chosen β from "
-            f"random angles, using {HARDWARE_OPTIMIZER}.")
+            f"<b>Real quantum computer.</b> This {n}+{n}-qubit experiment will be "
+            f"sent to {self._backend_name}. It runs a cold start at the chosen β "
+            f"from random angles, using {HARDWARE_OPTIMIZER}.")
         self.hardware_banner.setVisible(real)
         self.angles_group.setEnabled(not real)
         self.angles_lbl.setText(
@@ -407,6 +453,9 @@ class SetupWindow(QWidget):
     def load_config(self, config: SessionConfig = None):
         config = config or SessionConfig()
 
+        # Before the qubit mapping below: a new size clears the selection.
+        n = config.n_spins if spins_allowed(self._backend_name, config.n_spins) else 2
+        self.spins.setCurrentIndex(SPIN_CHOICES.index(n) if n in SPIN_CHOICES else 0)
         self.beta.setCurrentIndex(BETA_CHOICES.index(nearest_beta_choice(config.beta)))
         unit_idx = self.kb_unit.findData(config.kb_unit)
         self.kb_unit.setCurrentIndex(unit_idx if unit_idx >= 0 else
@@ -437,6 +486,7 @@ class SetupWindow(QWidget):
         return SessionConfig(
             backend_name=self._backend_name or self.manager.STANDARD_BACKEND,
             beta=self._beta_value(),
+            n_spins=self._n_spins(),
             kb_unit=self.kb_unit.currentData(),
             optimizer=self.optimizer.currentText(),
             iterations=self.iterations.value(),

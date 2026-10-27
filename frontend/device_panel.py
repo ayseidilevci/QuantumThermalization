@@ -1,8 +1,8 @@
 """Setup screen's device panel: a toggle between a static chip-schematic
 image (ported from the `gui` branch's tfd_gui.py BackendImageView /
 BACKEND_IMAGES) and a new interactive qubit-topology widget that lets the
-user pick subsystem A (A1/A2) of the TFD ansatz by dragging or clicking,
-with the mirrored subsystem B (B1/B2) filled in automatically.
+user pick subsystem A (the chain A1..An) of the TFD ansatz by dragging or
+clicking, with the mirrored subsystem B (B1..Bn) filled in automatically.
 
 Real chips are fixed, published hardware, not something to re-derive at
 runtime — so for every backend we have a reference schematic for (Tuna-5,
@@ -26,26 +26,29 @@ from math import ceil, sqrt
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QSize, QPointF
-from PySide6.QtGui import QColor, QPixmap, QImage, QPainter, QPen, QBrush
+from PySide6.QtGui import QColor, QPixmap, QImage, QPainter, QPainterPath, QPen, QBrush
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedLayout,
     QSizePolicy, QGraphicsView, QGraphicsScene, QGraphicsEllipseItem,
-    QGraphicsLineItem, QGraphicsSimpleTextItem,
+    QGraphicsLineItem, QGraphicsPathItem, QGraphicsSimpleTextItem,
 )
 
 from backend import starmon7
 from frontend.colors import Colors
+from frontend.session import roles
 
-ROLES = ("A1", "A2", "B1", "B2")
-REQUIRED_ADJACENT_PAIRS = (("A1", "A2"), ("B1", "B2"), ("A1", "B1"), ("A2", "B2"))
 
-# Roles A1/A2 (subsystem A) vs B1/B2 (subsystem B) are color-coded separately
-# so the two mirrored halves of the ansatz are visually distinguishable.
-_ROLE_COLOR = {
-    "A1": Colors.ACCENT, "A2": Colors.ACCENT,
-    "B1": Colors.WARN, "B2": Colors.WARN,
-}
+def required_pairs(n: int) -> list:
+    """Role pairs that must be coupled on the chip: the A chain, the B chain
+    and the rungs A_i–B_i (a 2 x n ladder)."""
+    chain = [(f"{s}{i}", f"{s}{i + 1}") for s in "AB" for i in range(1, n)]
+    return chain + [(f"A{i}", f"B{i}") for i in range(1, n + 1)]
+
+
+def _role_color(role: str) -> str:
+    # Subsystem A vs its mirror B, so the two halves are told apart.
+    return Colors.ACCENT if role.startswith("A") else Colors.WARN
 
 
 # =========================================================================
@@ -263,34 +266,40 @@ def backend_topology(qi_backend):
 _NODE_RADIUS = 22.0
 
 
-def find_mirror_pair(a1: int, a2: int, edges: set):
-    """Subsystem B for a chosen subsystem A: qubits (B1, B2), distinct from
-    A1/A2, with A1–B1, A2–B2 and B1–B2 all coupled — the mirrored half the
-    TFD ansatz needs. Returns None if the device has no such pair. If
-    several exist, the lowest-numbered one is taken, so the same A always
-    gives the same B."""
+def find_mirror_chain(a_chain: list, edges: set):
+    """Subsystem B for a chosen A chain: qubits B1..Bn, distinct from A and
+    each other, with every A_i–B_i and B_i–B_(i+1) coupled — the mirrored
+    half of the 2 x n ladder the TFD ansatz needs. Returns None if the device
+    has none. Lowest-numbered first, so the same A always gives the same B."""
     def neighbors(q):
         return sorted(next(iter(e - {q})) for e in edges if q in e)
 
-    for b1 in neighbors(a1):
-        if b1 in (a1, a2):
-            continue
-        for b2 in neighbors(a2):
-            if b2 in (a1, a2, b1):
+    def extend(b_chain):
+        i = len(b_chain)
+        if i == len(a_chain):
+            return b_chain
+        for b in neighbors(a_chain[i]):
+            if b in a_chain or b in b_chain:
                 continue
-            if frozenset((b1, b2)) in edges:
-                return b1, b2
-    return None
+            if b_chain and frozenset((b_chain[-1], b)) not in edges:
+                continue
+            found = extend(b_chain + [b])
+            if found:
+                return found
+        return None
+
+    return extend([])
 
 
 class QubitTopologyWidget(QGraphicsView):
-    """The user picks subsystem A only; subsystem B is filled in
-    automatically (see find_mirror_pair). Two ways to pick A:
+    """The user picks subsystem A's chain A1..An only; subsystem B is filled
+    in automatically (see find_mirror_chain). Two ways to pick A:
 
-    - drag: press on a qubit (A1), drag a line to a coupled qubit (A2) and
-      release;
-    - click: click A1, then A2, one by one (clicking A1 again un-picks it;
-      clicking any qubit once A is complete starts a new pick from there).
+    - drag: press on a qubit (A1) and drag through coupled qubits A2..An,
+      then release (dragging back over the previous qubit undoes a step);
+    - click: click A1..An one by one, each coupled to the one before
+      (clicking the last pick again undoes it; clicking any qubit once A is
+      complete starts a new pick from there).
 
     Emits `mapping_changed(dict)` on every change (role -> physical qubit
     index; incomplete/impossible selections emit {}), and
@@ -311,12 +320,15 @@ class QubitTopologyWidget(QGraphicsView):
         self._num_qubits = 0
         self._edges = set()
         self._coords = {}
+        self._n = 2                    # spins per system
+        self._a_path = []              # qubits picked for A1, A2, ... so far
         self._assignment = {}          # role -> qubit index
-        self._problem = None           # why the picked A has no valid B, if so
+        self._problem = None           # why the current pick can't work, if so
+        self._problem_is_hint = False  # True: a rejected click, the pick stays open
         self._node_items = {}          # qubit index -> QGraphicsEllipseItem
         self._label_items = {}         # qubit index -> QGraphicsSimpleTextItem (role badge)
 
-        self._drag_from = None         # qubit a press started on
+        self._drag_path = None         # qubits a drag has passed through
         self._drag_line = None         # rubber-band line while dragging
         self._dragging = False         # moved off the start qubit since press
         self._read_only = False
@@ -326,56 +338,64 @@ class QubitTopologyWidget(QGraphicsView):
         self._num_qubits = num_qubits
         self._edges = edges
         self._coords = coords if coords else simple_grid_layout(num_qubits)
-        self._assignment = {}
-        self._problem = None
-        self._redraw_scene()
-        self._emit_state()
+        self._set_path([])
+
+    def set_spins(self, n: int):
+        """Spins per system; a new size clears the selection."""
+        if n != self._n:
+            self._n = n
+            self._set_path([])
 
     def current_mapping(self) -> dict:
-        return dict(self._assignment) if len(self._assignment) == len(ROLES) else {}
+        complete = len(self._assignment) == 2 * self._n and not self._missing_pairs()
+        return dict(self._assignment) if complete else {}
 
     def clear_selection(self):
-        """Drop the whole role assignment (same end state as clicking A1
-        twice)."""
-        self._assignment = {}
-        self._problem = None
-        self._redraw_scene()
-        self._emit_state()
+        """Drop the whole role assignment."""
+        self._set_path([])
 
     def set_assignment(self, mapping: dict):
         """Restore a role -> qubit assignment directly (used when loading a
-        saved session), skipping any role/qubit that no longer fits this
-        topology (or collides with another role) rather than raising."""
-        valid = {}
-        used_qubits = set()
-        for role in ROLES:
+        saved session), skipping roles/qubits that no longer fit this
+        topology (or collide with another role) rather than raising."""
+        valid, used = {}, set()
+        for role in roles(self._n):
             qubit = mapping.get(role)
-            if qubit is None or qubit not in self._coords or qubit in used_qubits:
+            if qubit is None or qubit not in self._coords or qubit in used:
                 continue
             valid[role] = qubit
-            used_qubits.add(qubit)
+            used.add(qubit)
+        self._a_path = [valid[f"A{i}"] for i in range(1, self._n + 1) if f"A{i}" in valid]
         self._assignment = valid
         self._problem = None
         self._redraw_scene()
         self._emit_state()
 
     # ---- interaction ---------------------------------------------------
-    # A press on a qubit starts a potential drag. Releasing on a different
-    # qubit picks A1 (start) -> A2 (end); releasing on the same qubit counts
-    # as a click (see _click_qubit).
+    # A press on a qubit starts a potential drag through coupled qubits;
+    # releasing without moving counts as a click (see _click_qubit).
     def mousePressEvent(self, event):
         if self._read_only:
             return
         if event.button() == Qt.LeftButton:
-            self._drag_from = self._node_at(self.mapToScene(event.pos()))
+            start = self._node_at(self.mapToScene(event.pos()))
+            self._drag_path = [start] if start is not None else None
             self._dragging = False
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._drag_from is not None:
+        if self._drag_path is not None:
             scene_pos = self.mapToScene(event.pos())
             over = self._node_at(scene_pos)
-            if over != self._drag_from:
+            path = self._drag_path
+            if over is not None and over != path[-1]:
+                self._dragging = True
+                if len(path) > 1 and over == path[-2]:
+                    path.pop()                          # dragged back: undo a step
+                elif (over not in path and len(path) < self._n
+                      and frozenset((path[-1], over)) in self._edges):
+                    path.append(over)
+            elif over is None and len(path) == 1:
                 self._dragging = True
             if self._dragging:
                 # Snap the line's end to a qubit when hovering one.
@@ -384,26 +404,32 @@ class QubitTopologyWidget(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self._drag_from is not None:
-            start, end = self._drag_from, self._node_at(self.mapToScene(event.pos()))
-            self._drag_from = None
+        if event.button() == Qt.LeftButton and self._drag_path is not None:
+            path, self._drag_path = self._drag_path, None
+            end = self._node_at(self.mapToScene(event.pos()))
             self._hide_drag_line()
-            if end == start and not self._dragging:
-                self._click_qubit(start)
-            elif end is not None and end != start:
-                self._pick_subsystem_a(start, end)
-            # Released on empty space: drag cancelled, nothing changes.
+            if not self._dragging:
+                self._click_qubit(path[0])
+            elif len(path) > 1:
+                self._set_path(path)
+            elif end is not None and end != path[0]:
+                self._set_path(path, problem=f"Qubits {path[0]} and {end} aren't coupled, "
+                                              f"so they can't be A1–A2.")
+            # Released on empty space with nothing picked: nothing changes.
             self._dragging = False
         super().mouseReleaseEvent(event)
 
     def _show_drag_line(self, end: QPointF):
         if self._drag_line is None:
-            self._drag_line = QGraphicsLineItem()
+            self._drag_line = QGraphicsPathItem()
             self._drag_line.setPen(QPen(QColor(Colors.ACCENT), 3.0, Qt.DashLine, Qt.RoundCap))
             self._drag_line.setZValue(3)
             self.scene().addItem(self._drag_line)
-        x, y = self._coords[self._drag_from]
-        self._drag_line.setLine(x, y, end.x(), end.y())
+        line = QPainterPath(QPointF(*self._coords[self._drag_path[0]]))
+        for q in self._drag_path[1:]:
+            line.lineTo(QPointF(*self._coords[q]))
+        line.lineTo(end)
+        self._drag_line.setPath(line)
 
     def _hide_drag_line(self):
         if self._drag_line is not None:
@@ -417,35 +443,39 @@ class QubitTopologyWidget(QGraphicsView):
         return None
 
     def _click_qubit(self, qubit: int):
-        a1, a2 = self._assignment.get("A1"), self._assignment.get("A2")
-        if a1 is None or a2 is not None:
-            # Nothing picked yet, or A already complete: start over here.
-            self._assignment = {"A1": qubit}
-            self._problem = None
-        elif qubit == a1:
-            self._assignment = {}
-            self._problem = None
+        path = self._a_path
+        if not path or len(path) == self._n or (self._problem and not self._problem_is_hint):
+            # Nothing picked yet, A complete, or a dead end: start over here.
+            self._set_path([qubit])
+        elif qubit == path[-1]:
+            self._set_path(path[:-1])                   # undo the last pick
+        elif qubit in path:
+            role = f"A{path.index(qubit) + 1}"
+            self._set_path(path, problem=f"Qubit {qubit} is already {role}.", keep=True)
+        elif frozenset((path[-1], qubit)) not in self._edges:
+            self._set_path(path, keep=True, problem=(
+                f"Qubit {qubit} isn't coupled to A{len(path)} (qubit {path[-1]}); "
+                f"A{len(path) + 1} must be."))
         else:
-            self._pick_subsystem_a(a1, qubit)
-            return
-        self._redraw_scene()
-        self._emit_state()
+            self._set_path(path + [qubit])
 
-    def _pick_subsystem_a(self, a1: int, a2: int):
-        """Set A1/A2 and fill in B automatically, or record why that A
-        can't work on this device."""
-        self._assignment = {"A1": a1, "A2": a2}
-        self._problem = None
-        if frozenset((a1, a2)) not in self._edges:
-            self._problem = f"Impossible: qubits {a1} and {a2} aren't coupled, so they can't be A1–A2."
-        else:
-            pair = find_mirror_pair(a1, a2, self._edges)
-            if pair is None:
+    def _set_path(self, path: list, problem: str = None, keep: bool = False):
+        """Set the picked A chain; once it's complete, fill in B or record
+        why this A can't work. keep=True leaves the pick open after a
+        rejected click, so the user can try another qubit."""
+        self._a_path = list(path)
+        self._assignment = {f"A{i + 1}": q for i, q in enumerate(path)}
+        self._problem = problem
+        self._problem_is_hint = keep
+        if problem is None and len(path) == self._n:
+            chain = find_mirror_chain(path, self._edges)
+            if chain is None:
+                a_txt = "–".join(map(str, path))
                 self._problem = (
-                    f"Impossible: no qubit pair on this device mirrors A = {a1}–{a2} "
-                    f"(needs B1 next to {a1}, B2 next to {a2}, and B1–B2 coupled).")
+                    f"Impossible: no qubits on this device mirror A = {a_txt} "
+                    f"(needs B_i coupled to each A_i, and B1..B{self._n} coupled in a chain).")
             else:
-                self._assignment["B1"], self._assignment["B2"] = pair
+                self._assignment.update({f"B{i + 1}": q for i, q in enumerate(chain)})
         self._redraw_scene()
         self._emit_state()
 
@@ -475,25 +505,20 @@ class QubitTopologyWidget(QGraphicsView):
         if not self._coords:
             return
 
-        missing_pairs = self._missing_pairs()
-        complete = len(self._assignment) == len(ROLES)
-        required_sets = {frozenset(pair) for pair in REQUIRED_ADJACENT_PAIRS}
-        missing_sets = {frozenset(pair) for pair in missing_pairs}
+        role_at = {q: r for r, q in self._assignment.items()}
+        missing_sets = {frozenset(pair) for pair in self._missing_pairs()}
+        required_sets = {frozenset(pair) for pair in required_pairs(self._n)}
 
-        # connectivity edges: muted by default, highlighted once a full
-        # (valid or invalid) assignment exists.
+        # connectivity edges: muted by default, colored where the ladder
+        # needs them (green when coupled, red when the chosen roles aren't).
         for pair in self._edges:
             i, j = tuple(pair)
             if i not in self._coords or j not in self._coords:
                 continue
-            role_i = next((r for r, q in self._assignment.items() if q == i), None)
-            role_j = next((r for r, q in self._assignment.items() if q == j), None)
-            color = QColor(Colors.BORDER)
-            width = 1.4
-            if role_i and role_j and frozenset((role_i, role_j)) in required_sets:
-                is_missing = frozenset((role_i, role_j)) in missing_sets
-                color = QColor(Colors.BAD if is_missing else Colors.GOOD)
-                width = 2.6
+            color, width = QColor(Colors.BORDER), 1.4
+            if i in role_at and j in role_at and frozenset((role_at[i], role_at[j])) in required_sets:
+                bad = frozenset((role_at[i], role_at[j])) in missing_sets
+                color, width = QColor(Colors.BAD if bad else Colors.GOOD), 2.6
             x1, y1 = self._coords[i]
             x2, y2 = self._coords[j]
             line = QGraphicsLineItem(x1, y1, x2, y2)
@@ -501,40 +526,30 @@ class QubitTopologyWidget(QGraphicsView):
             line.setZValue(0)
             scene.addItem(line)
 
-        # required pairs that aren't real edges at all (drawn dashed/BAD so
-        # the user can see what's missing even when nothing connects them).
-        if complete:
-            for r1, r2 in missing_pairs:
-                q1, q2 = self._assignment[r1], self._assignment[r2]
-                if frozenset((q1, q2)) in self._edges:
-                    continue  # already drawn above as a real, invalid edge
-                if q1 not in self._coords or q2 not in self._coords:
-                    continue
-                x1, y1 = self._coords[q1]
-                x2, y2 = self._coords[q2]
-                pen = QPen(QColor(Colors.BAD), 2.0, Qt.DashLine)
-                line = QGraphicsLineItem(x1, y1, x2, y2)
-                line.setPen(pen)
-                scene.addItem(line)
-
-        # A picked but impossible: if A1/A2 aren't even coupled, show the
-        # requested link dashed/BAD; otherwise the A1–A2 edge itself is
-        # marked BAD (there's just no mirror B for it).
-        a1, a2 = self._assignment.get("A1"), self._assignment.get("A2")
-        if self._problem and a1 is not None and a2 is not None:
-            x1, y1 = self._coords[a1]
-            x2, y2 = self._coords[a2]
-            coupled = frozenset((a1, a2)) in self._edges
-            line = QGraphicsLineItem(x1, y1, x2, y2)
-            line.setPen(QPen(QColor(Colors.BAD), 2.6 if coupled else 2.0,
-                             Qt.SolidLine if coupled else Qt.DashLine))
-            line.setZValue(0.5)
+        # required pairs that aren't real edges at all (only reachable via a
+        # restored saved mapping), drawn dashed/BAD.
+        for r1, r2 in self._missing_pairs():
+            q1, q2 = self._assignment[r1], self._assignment[r2]
+            if frozenset((q1, q2)) in self._edges or q1 not in self._coords or q2 not in self._coords:
+                continue
+            line = QGraphicsLineItem(*self._coords[q1], *self._coords[q2])
+            line.setPen(QPen(QColor(Colors.BAD), 2.0, Qt.DashLine))
             scene.addItem(line)
+
+        # A complete A chain with no mirror B: mark the chain itself BAD.
+        if self._problem and not self._problem_is_hint and len(self._a_path) > 1:
+            for q1, q2 in zip(self._a_path, self._a_path[1:]):
+                coupled = frozenset((q1, q2)) in self._edges
+                line = QGraphicsLineItem(*self._coords[q1], *self._coords[q2])
+                line.setPen(QPen(QColor(Colors.BAD), 2.6 if coupled else 2.0,
+                                 Qt.SolidLine if coupled else Qt.DashLine))
+                line.setZValue(0.5)
+                scene.addItem(line)
 
         # nodes
         for idx, (x, y) in self._coords.items():
-            role = next((r for r, q in self._assignment.items() if q == idx), None)
-            fill = QColor(_ROLE_COLOR[role]) if role else QColor(Colors.BG_2)
+            role = role_at.get(idx)
+            fill = QColor(_role_color(role)) if role else QColor(Colors.BG_2)
             pen_color = QColor(Colors.TEXT) if role else QColor(Colors.BORDER)
             ellipse = QGraphicsEllipseItem(
                 x - _NODE_RADIUS, y - _NODE_RADIUS, _NODE_RADIUS * 2, _NODE_RADIUS * 2)
@@ -566,50 +581,44 @@ class QubitTopologyWidget(QGraphicsView):
         self._fit()
 
     def _missing_pairs(self):
-        if len(self._assignment) != len(ROLES):
+        if len(self._assignment) != 2 * self._n:
             return []
-        missing = []
-        for r1, r2 in REQUIRED_ADJACENT_PAIRS:
-            q1, q2 = self._assignment[r1], self._assignment[r2]
-            if frozenset((q1, q2)) not in self._edges:
-                missing.append((r1, r2))
-        return missing
+        return [(r1, r2) for r1, r2 in required_pairs(self._n)
+                if frozenset((self._assignment[r1], self._assignment[r2])) not in self._edges]
 
     def _emit_state(self):
-        if self._problem:
+        n, path = self._n, self._a_path
+        if self._problem and not self._problem_is_hint:
             self.status_changed.emit(self._problem + " Pick another A.")
             self.mapping_changed.emit({})
             return
 
-        if "A1" not in self._assignment:
-            self.status_changed.emit(
-                "Pick subsystem A: drag a line from A1 to a coupled qubit (A2), "
-                "or click A1 then A2. Subsystem B is chosen automatically.")
-            self.mapping_changed.emit({})
-            return
-        if "A2" not in self._assignment:
-            self.status_changed.emit(
-                f"A1 = qubit {self._assignment['A1']}. Click a coupled qubit for A2 "
-                f"(or click A1 again to undo).")
-            self.mapping_changed.emit({})
-            return
-        if len(self._assignment) != len(ROLES):
+        if not path:
+            status = (f"Pick subsystem A: drag a path through {n} coupled qubits "
+                      f"(A1 → A{n}), or click them one by one. Subsystem B is chosen "
+                      f"automatically.")
+        elif len(path) < n:
+            picked = ", ".join(f"A{i + 1} = {q}" for i, q in enumerate(path))
+            status = (f"{picked}. Click a qubit coupled to qubit {path[-1]} for "
+                      f"A{len(path) + 1} (or click qubit {path[-1]} again to undo).")
+        elif len(self._assignment) != 2 * n:
             # Only reachable via set_assignment() with a partial saved mapping.
-            self.status_changed.emit("Incomplete assignment — pick subsystem A again.")
-            self.mapping_changed.emit({})
-            return
-
-        missing = self._missing_pairs()
-        if missing:
-            pairs_txt = ", ".join(f"{r1}–{r2}" for r1, r2 in missing)
-            self.status_changed.emit(f"Invalid: {pairs_txt} must be adjacent on this device.")
-            self.mapping_changed.emit({})
+            status = "Incomplete assignment — pick subsystem A again."
+        elif self._missing_pairs():
+            pairs_txt = ", ".join(f"{r1}–{r2}" for r1, r2 in self._missing_pairs())
+            status = f"Invalid: {pairs_txt} must be adjacent on this device."
         else:
-            a = self._assignment
+            a = "–".join(str(self._assignment[f"A{i}"]) for i in range(1, n + 1))
+            b = "–".join(str(self._assignment[f"B{i}"]) for i in range(1, n + 1))
             self.status_changed.emit(
-                f"Valid: A = {a['A1']}–{a['A2']}, B = {a['B1']}–{a['B2']} (chosen "
-                f"automatically). Drag or click again to pick a different A.")
+                f"Valid: A = {a}, B = {b} (chosen automatically). Drag or click again "
+                f"to pick a different A.")
             self.mapping_changed.emit(dict(self._assignment))
+            return
+        if self._problem:
+            status = self._problem + " " + status
+        self.status_changed.emit(status)
+        self.mapping_changed.emit({})
 
 
 # =========================================================================
@@ -748,6 +757,9 @@ class DevicePanel(QWidget):
 
     def current_mapping(self) -> dict:
         return self.topology_view.current_mapping()
+
+    def set_spins(self, n: int):
+        self.topology_view.set_spins(n)
 
     def set_assignment(self, mapping: dict):
         self.topology_view.set_assignment(mapping)
