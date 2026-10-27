@@ -12,8 +12,8 @@ from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QListWidget, QListWidgetItem, QMessageBox,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout,
+    QWidget,
 )
 
 from backend.experiment_manager import ExperimentManager, ExperimentRecord

@@ -6,75 +6,12 @@ SESSION_SCHEMA_VERSION and branch on it in from_json_dict if the shape
 below ever changes.
 """
 
-import json
 from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
 SESSION_SCHEMA_VERSION = 1
-
-# Small local history of session files opened/saved from this app (see
-# record_recent_session / list_recent_sessions). No longer shown on the Load
-# screen — that lists experiment folders instead (backend.experiment_manager).
-# Separate
-# from qi_utilities' own job-record storage — this is just a most-recently-
-# used list of *parameter* files, not submitted-job history.
-_RECENTS_PATH = Path.home() / ".quantuminspire" / "gui_recent_sessions.json"
-_MAX_RECENTS = 15
-
-
-def _read_recents_raw() -> list:
-    if not _RECENTS_PATH.exists():
-        return []
-    try:
-        with _RECENTS_PATH.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
-
-
-def _write_recents_raw(entries: list) -> None:
-    try:
-        _RECENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _RECENTS_PATH.open("w", encoding="utf-8") as f:
-            json.dump(entries, f, indent=2)
-    except OSError:
-        pass  # a failed write here shouldn't block loading/saving a session
-
-
-def list_recent_sessions() -> list:
-    """Most-recent-first list of {"path": str, "used_at": iso-str} entries.
-    Entries whose file has since been deleted/moved are silently dropped
-    (and the pruned list re-saved) rather than shown as dead links.
-    """
-    entries = _read_recents_raw()
-    alive = [e for e in entries if isinstance(e, dict) and "path" in e
-             and Path(e["path"]).exists()]
-    if len(alive) != len(entries):
-        _write_recents_raw(alive)
-    return alive
-
-
-def record_recent_session(path) -> None:
-    """Move `path` to the front of the recents list, creating the entry if
-    it's new. Called on both a successful load and a save."""
-    path_str = str(Path(path).resolve())
-    entries = [e for e in _read_recents_raw() if e.get("path") != path_str]
-    entries.insert(0, {
-        "path": path_str,
-        "used_at": datetime.now().isoformat(timespec="seconds"),
-    })
-    _write_recents_raw(entries[:_MAX_RECENTS])
-
-
-# The four ansatz roles a physical qubit can be assigned to — see
-# gibbs_tfd_reproduction/tfd_circuit.py for the logical-qubit convention
-# (q0=A2, q1=A1, q2=B2, q3=B1) that qubit_mapping below gets translated into.
-ROLES = ("A1", "A2", "B1", "B2")
 
 # Spins per system: n = 2 is the Sagastizabal et al. experiment (2+2 qubits);
 # 3+3 and 4+4 use the n+n generalisation in tfd_study/ (model.py).
@@ -94,12 +31,9 @@ def spins_allowed(backend_name: str, n: int) -> bool:
     normalized = "".join(ch for ch in (backend_name or "").lower() if ch.isalnum())
     return n == 2 or normalized in MULTI_SPIN_BACKENDS
 
-# Default initial value for every variational angle. Not 0: the cost is
-# even in the angles (C(x) == C(-x)), so all-zero angles are a stationary
-# point at every beta, the correct answer at beta -> 0 but a saddle at
-# beta > 0. Optimizers started exactly there often never leave it (COBYLA
-# only escapes by shot-noise luck). 0.1 is the
-# start gibbs_tfd_reproduction/experiment.py uses.
+# Default initial value for every variational angle. Not 0: the cost is even
+# in the angles, so all-zero angles are a saddle point for beta > 0 that
+# optimizers often never leave.
 DEFAULT_START_ANGLE = 0.1
 
 # Real-hardware runs always use SPSA: it estimates the gradient from two
@@ -175,8 +109,7 @@ class SessionConfig:
     # Spins per system (see SPIN_CHOICES); the ansatz uses 2 * n_spins qubits.
     n_spins: int = 2
 
-    # Initial guess for the variational optimizer, not fixed final angles —
-    # minimize_cost() adjusts these during the run (see frontend/setup.py).
+    # The optimizer's starting guess; it adjusts the angles during the run.
     gamma1: float = DEFAULT_START_ANGLE
     gamma2: float = DEFAULT_START_ANGLE
     alpha1: float = DEFAULT_START_ANGLE

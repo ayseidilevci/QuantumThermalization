@@ -1,29 +1,17 @@
-from mpl_toolkits.mplot3d import Axes3D
-import numpy as np
-import matplotlib.pyplot as plt
 from itertools import product
-from qiskit import QuantumCircuit, transpile
 
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
+from qi_utilities.error_mitigation.toolkit.readout_error_mitigation import apply_readout_assignment_correction
 from qi_utilities.utility_functions.circuit_modifiers import apply_pre_measurement_rotations
 from qi_utilities.utility_functions.raw_data_processing import (
-    get_raw_data, get_multi_counts, get_multi_probs, observable_expectation_values_Z_basis,
+    get_multi_counts, get_multi_probs, get_raw_data, observable_expectation_values_Z_basis,
 )
-from qi_utilities.error_mitigation.toolkit.readout_error_mitigation import (
-    apply_readout_assignment_correction,
-)
+from qiskit import QuantumCircuit, transpile
 
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
 from tfd_circuit import TFDCircuit
-
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
-
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
 
 N_QUBITS = 4
 PAULIS = ["X", "Y", "Z"]
@@ -61,19 +49,6 @@ def build_tomography_circuit(gamma1, gamma2, alpha1, alpha2, subsystem_qubits=(0
         for q in range(N_QUBITS):
             qc.reset(q)
         qc.barrier()
-
-    # # readout calibration block
-    # offset = 4 * len(settings)
-    # for q in range(N_QUBITS):
-    #     qc.measure(q, offset + q)
-    # qc.barrier()
-    # for q in range(N_QUBITS):
-    #     qc.reset(q)
-    # qc.barrier()
-    # qc.x(range(N_QUBITS))
-    # qc.barrier()
-    # for q in range(N_QUBITS):
-    #     qc.measure(q, offset + 4 + q)
 
     return qc, settings
 

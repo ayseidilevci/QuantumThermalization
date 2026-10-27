@@ -4,8 +4,7 @@ One vertical (portrait) card per live backend, all in a single row that
 fills the full width and height below the header — N backends divide the
 row into N equal-width columns (see BackendSelectWindow's QGridLayout), a
 thin vertical rule separating the live QI device columns from the locally
-emulated Starmon-7 (see backend/starmon7.py; the QI API's own QX/Ry
-emulators are not offered). Each card's chip schematic (or a placeholder
+emulated Starmon-7 (see backend/starmon7.py). Each card's chip schematic (or a placeholder
 for a device we ship none for) fills it as a background image, colored if
 the backend is online/busy and grayscale if it's offline
 (backend.qi_manager.classify_backend_status is the "which devices are
@@ -16,18 +15,18 @@ stays fixed at the bottom.
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QPoint, QRectF, QPropertyAnimation, QEasingCurve, Signal
-from PySide6.QtGui import QFont, QPixmap, QImage, QPainter, QColor, QLinearGradient
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
-    QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QSizePolicy, QScrollArea, QMessageBox,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
+    QWidget,
 )
 
+from backend import starmon7
+from backend.qi_manager import STATE_OFFLINE, STATE_ONLINE, classify_backend_status
 from frontend.colors import Colors
 from frontend.device_panel import BACKEND_IMAGES, _lookup_by_name
-from backend import starmon7
-from backend.qi_manager import classify_backend_status, STATE_OFFLINE, STATE_ONLINE
 
 MIN_CARD_SIZE = QSize(110, 180)
 _NAME_HEIGHT = 40
@@ -115,7 +114,7 @@ class BackendCard(QFrame):
 
         # Dark scrim behind the bottom text so it reads over any image.
         self._scrim = QWidget(self)
-        self._scrim.setStyleSheet(f"""
+        self._scrim.setStyleSheet("""
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                 stop:0 rgba(6,16,28,0), stop:1 rgba(6,16,28,200));
         """)

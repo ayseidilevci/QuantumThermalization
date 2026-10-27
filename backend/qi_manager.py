@@ -1,15 +1,14 @@
+import threading
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
-import threading
-import webbrowser
 
 from compute_api_client import ApiClient, JobsApi
 from qi2_shared.client import config as qi_config
 from qi2_shared.utils import run_async
+from qi_utilities.utility_functions.data_handling import StoreProjectRecord
 from qiskit_quantuminspire.qi_provider import QIProvider
-
-from qi_utilities.utility_functions.data_handling import StoreProjectRecord, RetrieveProjectRecord
 
 from backend import starmon7
 
@@ -33,13 +32,8 @@ def _is_allowed_live_backend(name: str) -> bool:
     return normalized in {"tuna5", "tuna9", "tuna17"}
 
 
-# The live API reports a finer-grained status (see
-# compute_api_client.BackendStatus: OFFLINE, IDLE, EXECUTING, CALIBRATING,
-# BENCHMARKING) than the GUI needs. Collapse it to the three states the
-# backend-selection cards actually color: green/online, yellow/busy,
-# red/offline. Matched on status.value rather than importing the enum
-# itself, so this file doesn't have to track compute_api_client's exact
-# member set.
+# The backend cards color three states; the API reports five (offline, idle,
+# executing, calibrating, benchmarking), matched on status.value.
 STATE_ONLINE = "online"
 STATE_BUSY = "busy"
 STATE_OFFLINE = "offline"
@@ -61,7 +55,6 @@ class QuantumInspireManager:
         self.backends = []
         self.provider = None
 
-        self.userID = None
         self.login_code = None
 
         self.STANDARD_BACKEND = starmon7.NAME
@@ -85,11 +78,11 @@ class QuantumInspireManager:
 
         def worker():
             try:
-                from quantuminspire.settings.user_settings import UserSettings
-                from quantuminspire.managers.auth_manager import AuthManager
-                from quantuminspire.utils.authentication import OauthDeviceSession
                 from qi2_shared.settings import Url
                 from qi2_shared.utils import run_async
+                from quantuminspire.managers.auth_manager import AuthManager
+                from quantuminspire.settings.user_settings import UserSettings
+                from quantuminspire.utils.authentication import OauthDeviceSession
 
                 host = Url("https://api.quantum-inspire.com")
 
@@ -130,9 +123,6 @@ class QuantumInspireManager:
                 # This also retrieves and stores the team member ID.
                 auth_manager._store_tokens(host, tokens)
 
-                # Keep the manager state in sync.
-                self.userID = settings.auths[host].team_member_id
-
                 # Create the authenticated provider.
                 self.provider = QIProvider()
                 self.provider.backends()
@@ -144,8 +134,6 @@ class QuantumInspireManager:
                 print(f"QI login failed: {exc}")
 
                 self.provider = None
-                self.userID = None
-
                 if on_complete is not None:
                     on_complete(1)
 
@@ -170,9 +158,9 @@ class QuantumInspireManager:
             return False
 
         try:
-            from quantuminspire.settings.user_settings import UserSettings
-            from quantuminspire.managers.auth_manager import AuthManager
             from qi2_shared.settings import Url
+            from quantuminspire.managers.auth_manager import AuthManager
+            from quantuminspire.settings.user_settings import UserSettings
 
             host = Url("https://api.quantum-inspire.com")
 
@@ -187,9 +175,6 @@ class QuantumInspireManager:
             # This checks the stored access token and refreshes it
             # when necessary.
             auth_manager.refresh_tokens(host)
-
-            self.userID = settings.auths[host].team_member_id
-
             # Verify that the API provider can be created.
             provider = QIProvider()
             provider.backends()
@@ -202,8 +187,6 @@ class QuantumInspireManager:
             print(f"QI authentication check failed: {exc}")
 
             self.provider = None
-            self.userID = None
-
             return False
 
     def set_provider(self):
@@ -231,21 +214,6 @@ class QuantumInspireManager:
         print(f"Found {len(self.backends)} backends.")
 
         return self.provider
-
-    def update_provider(self):
-        self.provider = QIProvider()
-
-    def backend_availability(self) -> dict[str, str]:
-        """Map backend name -> "online"/"busy"/"offline" for every backend
-        set_provider() last found. Call set_provider() first to refresh
-        self.backends; this just classifies what's already there so the
-        backend-selection cards can re-color without another network round
-        trip for every repaint.
-        """
-        return {
-            info.name: classify_backend_status(info.status)
-            for info in self.backends
-        }
 
     def submit_circuit(self, circuit, backend, wait=None):
         """

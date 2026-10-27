@@ -1,20 +1,18 @@
-from PySide6.QtCore import Qt, Signal, QSignalBlocker
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
-    QComboBox, QDoubleSpinBox, QSpinBox, QMessageBox,
+    QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox,
+    QVBoxLayout, QWidget,
 )
 
 from backend import starmon7
-
 from frontend.colors import Colors
+from frontend.device_panel import DevicePanel
 from frontend.session import (
-    SessionConfig, DEFAULT_START_ANGLE, BETA_CHOICES, BETA_ZERO, KB_UNITS,
-    DEFAULT_KB_UNIT, HARDWARE_OPTIMIZER, SPIN_CHOICES, format_beta, format_temperature,
-    nearest_beta_choice, spins_allowed,
+    BETA_CHOICES, BETA_ZERO, DEFAULT_KB_UNIT, DEFAULT_START_ANGLE, HARDWARE_OPTIMIZER, KB_UNITS, SPIN_CHOICES,
+    SessionConfig, format_beta, format_temperature, nearest_beta_choice, spins_allowed,
 )
 from frontend.tutorial import TutorialCoach, TutorialStep
-from frontend.device_panel import DevicePanel
 
 SIDEBAR_WIDTH = 300
 
@@ -180,11 +178,6 @@ class SetupWindow(QWidget):
 
         side.addStretch()
 
-        # No separate "Home" button here — the persistent top bar already
-        # has one, visible on this screen. Saving a session lives on the
-        # Run screen instead, next to the converged result — see
-        # frontend/experiment.py.
-
         self.start_experiment_btn = QPushButton("▶  Start Experiment")
         self.start_experiment_btn.setMinimumHeight(46)
         self.start_experiment_btn.setEnabled(False)
@@ -236,8 +229,7 @@ class SetupWindow(QWidget):
         root.addWidget(main, stretch=1)
 
         # -------------------------------------------------
-        # Guided tutorial — a step-by-step coach mark over the controls
-        # above, instead of one static wall of text (see frontend/tutorial.py)
+        # Guided tutorial (see frontend/tutorial.py)
         # -------------------------------------------------
 
         self.tutorial = TutorialCoach(self, steps=[

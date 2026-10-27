@@ -1,6 +1,7 @@
 from qiskit import QuantumCircuit
 from qiskit.quantum_info import Statevector
 
+
 class TFDCircuit:
     def __init__(self, gamma1, gamma2, alpha1, alpha2, qubits=4):
         # q0 = A2

@@ -23,11 +23,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
+from qi_utilities.device_simulation.simulators import NoisySimulator
 from qiskit import QuantumCircuit, transpile
 from qiskit.quantum_info import DensityMatrix, Pauli, partial_trace, state_fidelity
 from scipy.optimize import minimize
 
-from qi_utilities.device_simulation.simulators import NoisySimulator
 from cost_function import CostFunction
 from ground_truth import GibbsState, default_subsystem_hamiltonian
 from tfd_circuit import TFDCircuit

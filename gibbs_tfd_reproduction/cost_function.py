@@ -2,24 +2,19 @@ import json
 import os
 from datetime import datetime
 
-from qiskit import QuantumCircuit, transpile
+import numpy as np
+from qi_utilities.error_mitigation.toolkit.readout_error_mitigation import apply_readout_assignment_correction
 from qi_utilities.utility_functions.circuit_modifiers import apply_pre_measurement_rotations
 from qi_utilities.utility_functions.raw_data_processing import (
-    get_raw_data, get_multi_counts, get_multi_probs, observable_expectation_values_Z_basis,
+    get_multi_counts, get_multi_probs, get_raw_data, observable_expectation_values_Z_basis,
 )
-from qi_utilities.error_mitigation.toolkit.readout_error_mitigation import apply_readout_assignment_correction
-from qiskit.quantum_info import Pauli
+from qiskit import QuantumCircuit, transpile
+from qiskit.quantum_info import SparsePauliOp
 from scipy.optimize import minimize
-import numpy as np
-import matplotlib.pyplot as plt
 
 from tfd_circuit import TFDCircuit
-from qiskit.quantum_info import SparsePauliOp
-import numpy as np
-from tomography import plot_density_matrix
+from tomography import build_tomography_circuit, plot_density_matrix, reconstruct_density_matrix
 
-
-from tomography import build_tomography_circuit, reconstruct_density_matrix
 # q0 = A2
 # q1 = A1
 # q2 = B2
@@ -29,14 +24,10 @@ class CostFunction:
     def __init__(self, varsigma=1.57, backend=None, initial_layout=(0,2,3,5), subsystem_qubits=(0,1),
                  tomography=True, results_dir="results", run_tag=None, shots=8192,
                  wait_for_result=None):
-        # tomography=False skips the per-evaluation 9-setting tomography (and
-        # its live PNG): on a noisy simulator it costs several times more than
-        # the cost circuit itself, so callers that only need the cost value
-        # can turn it off and run tomography.run_tomography when they want it.
-        #
-        # wait_for_result(job) -> Result replaces the plain job.result() call.
-        # Real hardware needs it: QIJob.result() gives up after 60 s, far
-        # less than a typical queue wait (see frontend/experiment.py).
+        # tomography=False skips the per-evaluation 9-setting tomography, which
+        # costs several times more than the cost circuit itself.
+        # wait_for_result(job) -> Result replaces job.result(): on real
+        # hardware QIJob.result() gives up after 60 s, less than a queue wait.
         self.varsigma = varsigma
         self.tomography = tomography
         self.backend = backend
@@ -49,13 +40,8 @@ class CostFunction:
         self.tomography_history = []
         self.subsystem_qubits = subsystem_qubits
 
-        # --- Real-time progress log ---
-        # One line gets appended here the instant a hardware job's cost
-        # comes back, so whatever has run so far survives a crash, a
-        # dropped connection, or a Ctrl-C mid-sweep. run_tag ties every
-        # call in one script run to the same file; pass one in explicitly
-        # (e.g. from experiment.py) if you want several CostFunction
-        # instances in the same run to share a single log.
+        # Progress log: one line per cost evaluation, so a crash or Ctrl-C
+        # loses nothing. Instances sharing a run_tag share one file.
         self.results_dir = results_dir
         os.makedirs(self.results_dir, exist_ok=True)
         self.run_tag = run_tag or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -155,12 +141,7 @@ class CostFunction:
 
         cost_B = exp_X_A + exp_X_B + self.varsigma*(exp_ZZ_A+exp_ZZ_B) - beta**(-self.varsigma)*(exp_XX_BA+exp_ZZ_BA)
 
-        # --- Real-time print + on-disk append, the moment this iteration's
-        # cost is known. This happens on EVERY call -- regardless of the
-        # tomography toggle above, since it only needs cost_B -- so you can
-        # `tail -f` the log file or just watch stdout to see the optimizer
-        # actually converging live, and whatever ran before a crash/interrupt
-        # is already saved to disk. ---
+        # Print and log every evaluation as soon as it's known.
         record = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "beta": beta,
@@ -195,21 +176,8 @@ class CostFunction:
                      save_path=f"plots/tomography_live_beta{beta}.png")
         return rho
 
-    # def minimize_cost(self, x0, beta, method='COBYLA', maxiter=None, callback=None):
-    #     """Run the classical optimizer. `method` is any scipy.optimize.minimize
-    #     method that supports a plain `callback(xk)` (COBYLA, are verified to; 
-    #     see frontend/setup.py's OPTIMIZER_METHODS).
-    #     `callback`, if given, is invoked with the current parameter vector
-    #     after every iteration — used by the GUI to stream progress live.
-    #     """
-    #     options = {'maxiter': maxiter} if maxiter is not None else None
-    #     optimized_params = minimize(
-    #         self.cost_function, x0=x0, args=(beta,), method=method,
-    #         options=options, callback=callback,
-    #     )
     def minimize_cost(self, x0, beta):
         optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='COBYLA', options={'maxiter': 100, 'rhobeg': 0.5})
-        # optimized_params = minimize(self.cost_function, x0=x0, args=(beta,), method='BFGS', options={'maxiter': 100, 'eps': 0.1})
         return optimized_params.x
 
     def cost_lower_bound(beta, varsigma=1.57):

@@ -20,8 +20,6 @@ from math import pi
 
 NAME = "Starmon-7"
 
-NUM_QUBITS = 7
-
 # Same pairs as the "Coupling map" in qi_utilities' backend_parameters.json.
 EDGES = [(0, 2), (0, 3), (1, 3), (1, 4), (2, 5), (3, 5), (3, 6), (4, 6)]
 
@@ -31,7 +29,6 @@ NATIVE_SINGLE_QUBIT_GATES = (
 )
 NATIVE_TWO_QUBIT_GATES = ("CZ",)
 DECOMPOSED_GATES = ("Rz(θ)", "H", "CNOT", "SWAP")
-FORBIDDEN_OPERATIONS = ("CR", "CRk", "Toffoli", "binary-controlled gates")
 
 SINGLE_QUBIT_GATE_NS = 20
 CZ_GATE_NS = 60

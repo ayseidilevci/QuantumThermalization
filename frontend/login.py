@@ -1,13 +1,9 @@
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QLabel,
-    QPushButton,
-)
+from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 from frontend.colors import Colors
+
 
 class LoginWindow(QWidget):
 

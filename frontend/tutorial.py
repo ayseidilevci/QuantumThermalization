@@ -10,11 +10,9 @@ border drawn around whichever control the current step is about.
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, QPoint, QRect, Signal, QObject
+from PySide6.QtCore import QObject, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QFrame,
-)
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from frontend.colors import Colors
 

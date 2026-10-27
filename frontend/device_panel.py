@@ -1,37 +1,23 @@
-"""Setup screen's device panel: a toggle between a static chip-schematic
-image (ported from the `gui` branch's tfd_gui.py BackendImageView /
-BACKEND_IMAGES) and a new interactive qubit-topology widget that lets the
-user pick subsystem A (the chain A1..An) of the TFD ansatz by dragging or
-clicking, with the mirrored subsystem B (B1..Bn) filled in automatically.
+"""Setup screen's device panel: a toggle between a static chip schematic and
+an interactive qubit-topology widget, where the user picks subsystem A (the
+chain A1..An) of the TFD ansatz by dragging or clicking, with the mirrored
+subsystem B (B1..Bn) filled in automatically.
 
-Real chips are fixed, published hardware, not something to re-derive at
-runtime — so for every backend we have a reference schematic for (Tuna-5,
-Tuna-9, Tuna-17, Starmon-7), both the on-screen node *coordinates* and the real
-*connectivity* are hardcoded directly in KNOWN_BACKEND_TOPOLOGY below,
-read straight off the schematics in Appdata/Img/, rather than parsed from
-the SVG at runtime or fetched from the live API. (An earlier version tried
-both: parsing qubit-label positions out of the SVG at runtime, and a
-generic graph-layout algorithm for anything else — both were more clever
-than they needed to be and each introduced its own bugs. Direct, boring
-data wins here.)
-
-Only a backend that ISN'T one of the known chips (an unfamiliar/live
-backend name we don't ship a schematic for) falls back to querying the live
-QIBackend's own coupling map for connectivity (see backend_topology) and a
-plain row-major grid for positions (see simple_grid_layout) — still no
-fancy layout tricks, just a readable default for the unknown case.
+For the known chips (Tuna-5, Tuna-9, Tuna-17, Starmon-7) node coordinates and
+connectivity are hardcoded in KNOWN_BACKEND_TOPOLOGY, read off the schematics
+in Appdata/Img/. Any other backend falls back to the live QIBackend's coupling
+map (backend_topology) on a plain grid (simple_grid_layout).
 """
 
 from math import ceil, sqrt
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QSize, QPointF
-from PySide6.QtGui import QColor, QPixmap, QImage, QPainter, QPainterPath, QPen, QBrush
+from PySide6.QtCore import QPointF, QSize, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
-    QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedLayout,
-    QSizePolicy, QGraphicsView, QGraphicsScene, QGraphicsEllipseItem,
-    QGraphicsLineItem, QGraphicsPathItem, QGraphicsSimpleTextItem,
+    QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsPathItem, QGraphicsScene, QGraphicsSimpleTextItem,
+    QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget,
 )
 
 from backend import starmon7
@@ -52,8 +38,7 @@ def _role_color(role: str) -> str:
 
 
 # =========================================================================
-#  Image mode — real backend chip schematics (Appdata/Img/), ported from
-#  gui.py's BackendImageView/BACKEND_IMAGES and restyled to Colors.
+#  Image mode — real backend chip schematics (Appdata/Img/)
 # =========================================================================
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "Appdata" / "Img"
@@ -139,14 +124,8 @@ KNOWN_BACKEND_TOPOLOGY = {
 
 
 def simple_grid_layout(num_qubits: int, spacing: float = 90.0):
-    """Fallback node layout for a backend we have no real coordinates for:
-    a plain row-major grid. Deliberately not graph-aware — an earlier
-    version of this tried a spectral (Laplacian eigenvector) embedding to
-    make connected qubits land next to each other, which is correct for a
-    clean 2D lattice but turns into a dense, unreadable tangle on anything
-    more connected (a simulator's near-complete coupling, say). A plain grid
-    stays readable regardless of how many edges there are.
-    """
+    """Fallback node layout for a backend we have no real coordinates for: a
+    plain row-major grid, which stays readable however many edges there are."""
     if num_qubits <= 0:
         return {}
     ncols = ceil(sqrt(num_qubits))
@@ -216,10 +195,7 @@ class BackendImageView(QLabel):
         self._redraw()
 
     def _redraw(self):
-        # Qt's SVG renderer already draws these schematics' <text> labels
-        # (qubit indices, "TC" couplers) natively — an earlier version of
-        # this widget re-drew them manually on the assumption QtSvg couldn't,
-        # which just doubled every label. Render straight through instead.
+        # QtSvg draws the schematics' own text labels; nothing is redrawn here.
         size = self.size()
         if size.width() < 2 or size.height() < 2:
             return
@@ -317,7 +293,6 @@ class QubitTopologyWidget(QGraphicsView):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumHeight(160)
 
-        self._num_qubits = 0
         self._edges = set()
         self._coords = {}
         self._n = 2                    # spins per system
@@ -335,7 +310,6 @@ class QubitTopologyWidget(QGraphicsView):
 
     # ---- public API --------------------------------------------------
     def set_topology(self, num_qubits: int, edges: set, coords: dict = None):
-        self._num_qubits = num_qubits
         self._edges = edges
         self._coords = coords if coords else simple_grid_layout(num_qubits)
         self._set_path([])

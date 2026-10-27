@@ -27,20 +27,19 @@ Run from this folder:  python reproducibility_check.py
 
 import sys
 import time
+from pathlib import Path
 
 sys.path.insert(0, '.')  # run from this folder
 
-from pathlib import Path
-
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+from qi_utilities.device_simulation.simulators import NoisySimulator
 from qiskit.quantum_info import DensityMatrix, state_fidelity
 from scipy.optimize import minimize
 
-from qi_utilities.device_simulation.simulators import NoisySimulator
 from cost_function import CostFunction
-from tomography import run_tomography, reconstruct_density_matrix, plot_density_matrix
 from ground_truth import GibbsState, default_subsystem_hamiltonian
+from tomography import plot_density_matrix, reconstruct_density_matrix, run_tomography
 
 PLOTS_DIR = Path("plots")
 
@@ -78,7 +77,6 @@ def random_nonzero_x0(rng):
 
 def run_one_trial(backend, beta, x0, target):
     cf = CostFunction(varsigma=VARSIGMA, backend=backend, initial_layout=INITIAL_LAYOUT)
-    cf.circuit_pdf = None  # disable cost_function.py's per-call circuit-diagram side effect
 
     result = minimize(cf.cost_function, x0=x0, args=(beta,), method='COBYLA',
                        options={'maxiter': 100, 'rhobeg': 0.5})

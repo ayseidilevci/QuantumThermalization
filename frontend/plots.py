@@ -1,16 +1,10 @@
-"""Shared matplotlib canvas + styling, ported from the `gui` branch's
-tfd_gui.py (MplCanvas / style_axes) and restyled against frontend.colors.Colors
-instead of that branch's own Pal palette, so every plot in this app matches
-the rest of the Qt chrome."""
+"""Shared matplotlib canvas, axis styling and card panel, styled with
+frontend.colors.Colors so every plot matches the rest of the app."""
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QWidget, QSizePolicy, QGroupBox, QVBoxLayout, QHBoxLayout, QPushButton,
-    QFrame, QLabel,
-)
-
-from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from frontend.colors import Colors
 
@@ -99,28 +93,3 @@ def panel(title: str, widget: QWidget, on_save=None) -> QFrame:
 
     lay.addWidget(widget, stretch=1)
     return box
-
-
-def panel_card_stylesheet() -> str:
-    """Stylesheet for a QGroupBox-style card wrapping a plot/panel, matching
-    Colors instead of ad hoc per-screen colors."""
-    c = Colors
-    return f"""
-        QGroupBox {{
-            background: {c.BG_2};
-            border: 1px solid {c.BORDER};
-            border-radius: 12px;
-            margin-top: 14px;
-            padding: 8px;
-            font-weight: 600;
-            color: {c.TEXT};
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            subcontrol-position: top left;
-            left: 12px;
-            top: 2px;
-            padding: 0 6px;
-            color: {c.ACCENT};
-        }}
-    """

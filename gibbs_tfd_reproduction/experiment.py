@@ -1,14 +1,12 @@
-import numpy as np
-from qiskit.quantum_info import Statevector, DensityMatrix, partial_trace, state_fidelity
-from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
+import numpy as np
+from qi_utilities.device_simulation.simulators import NoisySimulator
+from qiskit.quantum_info import DensityMatrix, Statevector, partial_trace, state_fidelity
 
+from cost_function import CostFunction
 from ground_truth import GibbsState, TFDState, default_subsystem_hamiltonian
 from tfd_circuit import TFDCircuit
-from cost_function import CostFunction
-from tomography import run_tomography, reconstruct_density_matrix, plot_tomography_grid
-from qi_utilities.device_simulation.simulators import NoisySimulator
-
+from tomography import plot_tomography_grid, reconstruct_density_matrix, run_tomography
 
 H_AA = default_subsystem_hamiltonian()
 
@@ -37,11 +35,7 @@ results = {0: x0.copy()}
 
 for beta in betas:
     cost_function.cost_history = []
-    cost_function.circuit_pdf = PdfPages(f"plots/circuits_beta{beta}.pdf")
-
-    cost_function.circuit_pdf = PdfPages(f"plots/circuits_beta{beta}.pdf")
     angles = cost_function.minimize_cost(x0, beta)
-    cost_function.circuit_pdf.close()
 
     results[beta] = angles
     x0 = angles

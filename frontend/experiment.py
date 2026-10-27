@@ -1,84 +1,65 @@
-"""Run screen. Rebuilt from the original minimal ExperimentWindow (a single
-placeholder QLabel + hardcoded angles) into a real variational run:
-OptimizationWorker drives an exact, noiseless cost evaluation (statevector
-simulation via TFDCircuit — the same formula as
-gibbs_tfd_reproduction/verify_exact_cost.py) on a background QThread
-(mirroring the gui branch's tfd_gui.py VariationalWorker QObject/QThread/
-Signal pattern) so the UI streams the loss curve and a live
-reduced-density-matrix estimate without freezing, then submits the
-optimized circuit to the selected Quantum Inspire backend.
+"""Run screen: runs the optimization on a background QThread
+(OptimizationWorker) and streams the cost, fidelity and density matrix to
+live plots, then submits the optimized circuit to the chosen backend.
 
-Deliberately NOT gibbs_tfd_reproduction.cost_function.CostFunction: that
-module was rewritten to build a real measurement circuit and run it on a
-backend (NoisySimulator), with no callback support and no configurable
-method/maxiter — each cost evaluation now takes seconds, and scipy can't
-stream intermediate steps to it at all. Fine for the reproduction
-pipeline's own scripts; wrong tool for an interactive GUI that needs to
-stream dozens of steps smoothly in under a second.
+2+2 runs use gibbs_tfd_reproduction's CostFunction: an ideal Starmon-7
+simulation on the emulator, the device itself on real hardware. 3+3 and
+4+4 runs use backend/ladder_tfd.py, on Tuna-17 only.
 """
 
 import csv
 import json
+import sys
 import time
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
+# cost_function.py imports its siblings bare ("from tfd_circuit import ...").
+sys.path.append(str(Path(__file__).resolve().parent.parent / "gibbs_tfd_reproduction"))
+
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import numpy as np
 from matplotlib.ticker import MaxNLocator
-
-from PySide6.QtCore import Qt, QThread, QObject, Signal
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QLabel, QPushButton,
-    QFileDialog, QMessageBox, QTabWidget, QTabBar, QScrollArea,
+    QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea,
+    QTabBar, QTabWidget, QVBoxLayout, QWidget,
 )
-from frontend.plots import MplCanvas, style_axes, panel
-from frontend.device_panel import QubitTopologyWidget, KNOWN_BACKEND_TOPOLOGY, _lookup_by_name
-from frontend.hardware_panels import DeviceStatusWidget, HardwareJobsView
-
-from scipy.optimize import minimize
-
+from qi_utilities.device_simulation.simulators import NoisySimulator
 from qiskit import QuantumCircuit, QuantumRegister, transpile
 from qiskit.providers.jobstatus import JobStatus
-from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity, Pauli
-
-from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
-
-import sys
-sys.path.append(str(Path(__file__).resolve().parent.parent / "gibbs_tfd_reproduction"))
-from gibbs_tfd_reproduction.cost_function import CostFunction
-from qi_utilities.device_simulation.simulators import NoisySimulator
+from qiskit.quantum_info import DensityMatrix, state_fidelity
+from scipy.optimize import minimize
 
 from backend import starmon7
-from backend.spsa import spsa_minimize
-from backend.ladder_tfd import LadderTFD, loss_lower_bound
-from tfd_study import model as tfd_model
 from backend.experiment_manager import PROJECTS_PATH, write_experiment_settings
+from backend.ladder_tfd import LadderTFD, loss_lower_bound
+from backend.spsa import spsa_minimize
 from frontend.colors import Colors
+from frontend.device_panel import KNOWN_BACKEND_TOPOLOGY, QubitTopologyWidget, _lookup_by_name
+from frontend.hardware_panels import DeviceStatusWidget, HardwareJobsView
+from frontend.plots import MplCanvas, panel, style_axes
 from frontend.session import (
-    SessionConfig, DEFAULT_START_ANGLE, HARDWARE_OPTIMIZER, format_beta, format_temperature,
+    DEFAULT_START_ANGLE, HARDWARE_OPTIMIZER, SessionConfig, format_beta, format_temperature,
     random_start_angles, roles,
 )
 from frontend.upload import save_session_dialog
-from frontend.plots import MplCanvas, style_axes, panel
+from gibbs_tfd_reproduction.cost_function import CostFunction
+from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
+from tfd_study import model as tfd_model
 
 SIDEBAR_WIDTH = 300
-BOTTOM_BAR_HEIGHT = 200
 
 # Logical-qubit order TFDCircuit builds on (see tfd_circuit.py): q0=A2,
 # q1=A1, q2=B2, q3=B1. A role->physical-qubit mapping from the device panel
 # becomes a transpile() initial_layout in this order.
 _LOGICAL_ROLE_ORDER = ("A2", "A1", "B2", "B1")
 
-# Purely cosmetic: the exact statevector cost is sub-millisecond per
-# evaluation, so a run finishes before the loss curve or density-matrix
-# bars have any chance to visibly animate. A short pause per iteration
-# (on the worker thread, not the GUI thread) makes the live updates
-# actually watchable during a demo instead of just snapping to the final
-# result. Tune down/remove for real runs where speed matters more.
+# Pause per emulator iteration so the live plots visibly animate; the
+# noiseless simulation is otherwise near-instant.
 _STEP_DELAY_SECONDS = 0.06
 
 # How often a queued hardware job's status is polled, and how the Qiskit
@@ -98,10 +79,8 @@ _JOB_STATUS_TEXT = {
 def _now() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
-# Phase colormap for the density-matrix bars: a light/dark ramp in the app's
-# blue instead of a rainbow. Dark at ±π, light at 0 — cyclic, so -π and π
-# (the same phase) get the same color, and for the real matrices here
-# positive entries read light and negative ones dark.
+# Phase colormap for the density bars: cyclic light/dark blue, light at 0
+# and dark at ±π.
 _PHASE_DARK = "#2B5A80"
 _PHASE_LIGHT = "#D6F1FB"
 _PHASE_CMAP = mcolors.LinearSegmentedColormap.from_list(
@@ -124,36 +103,15 @@ def _nice_limits(lo, hi, nbins=5, integer=False):
     return ticks[0], ticks[-1]
 
 
-def _exact_cost(params, beta, varsigma=1.57):
-    """Exact, noiseless cost — same formula as
-    gibbs_tfd_reproduction/verify_exact_cost.py's exact_cost, reimplemented
-    here (not imported) since that module uses bare imports that only
-    resolve when gibbs_tfd_reproduction/ itself is on sys.path, and has a
-    top-level print() side effect on import. Takes `params` as a single
-    array (scipy's calling convention) rather than four positional args.
-    """
-    g1, g2, a1, a2 = params
-    sv = TFDCircuit(g1, g2, a1, a2).get_state_vector()
-    exp_X_A = sv.expectation_value(Pauli("IIXI")).real + sv.expectation_value(Pauli("IIIX")).real
-    exp_X_B = sv.expectation_value(Pauli("XIII")).real + sv.expectation_value(Pauli("IXII")).real
-    exp_ZZ_A = sv.expectation_value(Pauli("IIZZ")).real
-    exp_ZZ_B = sv.expectation_value(Pauli("ZZII")).real
-    exp_XX_BA = sv.expectation_value(Pauli("XIXI")).real + sv.expectation_value(Pauli("IXIX")).real
-    exp_ZZ_BA = sv.expectation_value(Pauli("ZIZI")).real + sv.expectation_value(Pauli("IZIZ")).real
-    return (exp_X_A + exp_X_B + varsigma * (exp_ZZ_A + exp_ZZ_B)
-            - beta ** (-varsigma) * (exp_XX_BA + exp_ZZ_BA))
-
-
 class _Aborted(Exception):
-    """Raised from inside scipy's optimizer callback to unwind minimize()
-    cleanly when the user hits Stop (verified against COBYLA)."""
+    """Raised from the optimizer's callback or a job wait to unwind the run
+    when the user hits Stop."""
 
 
 class OptimizationWorker(QObject):
     """Runs on a background QThread. Emits `progress(iteration, cost)` every
-    optimizer step, `rho_progress(rho)` with the live reduced density matrix
-    of subsystem A (an exact partial trace of the simulated ansatz state,
-    not a placeholder), then `finished(result_dict)` once done.
+    optimizer step, `rho_progress(rho)` with subsystem A's measured density
+    matrix, then `finished(result_dict)` once done.
     """
 
     progress = Signal(int, float)
@@ -305,22 +263,13 @@ class OptimizationWorker(QObject):
         current_beta = [betas[0]]
         start_params = x0.copy()
 
-        # Live, incremental progress log: one line appended on every single
-        # optimizer iteration (see callback() below), independent of
-        # whether this run ever reaches the real-backend submission at the
-        # end. So a real user's run can be watched as it happens, and
-        # whatever ran before a crash, a force-quit, or a Stop click is
-        # already safely on disk -- not just held in this worker's memory.
+        # Append-only log of every iteration, so a crash or Stop loses nothing.
         run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
         live_dir = PROJECTS_PATH / "_live_runs"
         live_dir.mkdir(parents=True, exist_ok=True)
         self.live_log_path = live_dir / f"{config.backend_name}_{run_tag}.jsonl"
         self.log.emit(f"Live progress log: {self.live_log_path}")
 
-        # Computed once up front rather than per-iteration or only at the
-        # end: the true Gibbs state depends only on beta, not on the
-        # optimizer's current guess, so the live fidelity trace below and
-        # the final result further down can share this one reference.
         n = config.n_spins
         try:
             target = DensityMatrix(tfd_model.gibbs_state(n, config.beta))
@@ -351,27 +300,13 @@ class OptimizationWorker(QObject):
             self.log.emit(f"{n}+{n} qubits on {ladder.layout}: the fidelity is measured "
                           f"by tomography at the end ({3 ** n} circuits).")
 
-        # The live density-matrix preview is by far the most expensive thing
-        # to redraw (a full 3D bar plot + colorbar rebuild, ~20-100ms each),
-        # and it runs on the UI thread since Qt marshals the signal there.
-        # Emitting it on every single callback call made the whole run look
-        # hung: for a typical 100-iteration run this alone accounted for ~90%
-        # of the wall-clock time, all spent redrawing on the main thread
-        # instead of anything the optimizer needed. Cap it to a bounded
-        # number of live previews across the whole run instead — the actual
-        # optimization (this is a local statevector simulation, not a
-        # hardware round-trip) finishes in well under a second regardless of
-        # iteration count. Fidelity itself is just linear algebra on a 4x4
-        # matrix (no redraw of an expensive 3D plot involved) so, unlike the
-        # density preview, it doesn't need the same throttling.
+        # Redrawing the 3D density preview is slow and happens on the GUI thread,
+        # so emulator runs draw at most ~20 previews.
         rho_every = max(1, config.iterations // 20) if local else 1
 
-        # Every cost evaluation of the current beta step as (params, cost,
-        # rho_A). The live plots must show the optimizer's current point xk,
-        # not whatever was evaluated last: optimizers probe trial points
-        # (COBYLA's model steps) that they then reject, and plotting those made healthy
-        # runs look erratic. xk is always one of the evaluated points, so
-        # it's looked up here instead of re-running circuits for it.
+        # Every evaluation of the current beta step as (params, cost, rho_A), so
+        # the live plots show the optimizer's accepted point xk, not its rejected
+        # trial points.
         evaluations = []
 
         def evaluate(params, beta):
@@ -405,8 +340,6 @@ class OptimizationWorker(QObject):
             except Exception:
                 pass  # a live preview glitch shouldn't kill the optimization
 
-            # Append this iteration to disk the instant it's known, rather
-            # than waiting for the run to finish.
             try:
                 with open(self.live_log_path, "a") as f:
                     f.write(json.dumps({
@@ -518,11 +451,8 @@ class OptimizationWorker(QObject):
             return
 
 
-        # How good the prepared state actually is, not just how low the
-        # (engineered, proxy) cost got: fidelity against the true Gibbs
-        # state ρ ∝ exp(-βH) — the same ground-truth check
-        # gibbs_tfd_reproduction/experiment.py runs after optimizing.
-        # Reuses `target` computed once above rather than recomputing it.
+        # Fidelity to the true Gibbs state: the real measure of success (the cost
+        # is only a proxy).
         fidelity = None
         if target is not None:
             try:
@@ -535,8 +465,7 @@ class OptimizationWorker(QObject):
             else "Optimization complete. Submitting circuit to Quantum Inspire...")
         submitted = False
         submit_error = None
-        # Set before the try: a failure before submission must still reach
-        # finished.emit below instead of crashing on an unbound name.
+        # Set before the try, so a failed submission still reaches finished.emit.
         real_counts = None
         try:
             if ladder is not None:
@@ -546,17 +475,8 @@ class OptimizationWorker(QObject):
                 backend = self.manager.get_backend(config.backend_name) if local else cost_fn.backend
                 initial_layout = [config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
                 qc = TFDCircuit(*final_params).as_qiskit_circuit()
-            # Always measure, for every backend -- local or real. This used
-            # to be gated behind `if local:`, on the belief that only the
-            # local emulator needed it; in fact TFDCircuit.as_qiskit_circuit()
-            # never adds measurement on its own, so a REAL backend (Tuna-N)
-            # was being sent a circuit with no measure() at all. That's
-            # exactly why it failed server-side with "FEC: Execute failed.
-            # Did not get a dataset back" -- there was nothing to measure, so
-            # no dataset could ever come back. Measuring into a plain "c"
-            # register (not measure_all()'s "meas") is what the local
-            # emulator specifically needs; it's also perfectly fine for a
-            # real backend, so one code path now covers both.
+            # TFDCircuit adds no measurements: measure every qubit into a plain "c"
+            # register, which the Starmon-7 emulator expects.
             if ladder is None:   # LadderTFD's counts circuit is already measured
                 measured = QuantumCircuit(qc.num_qubits, qc.num_qubits)
                 measured.compose(qc, inplace=True)
@@ -568,14 +488,6 @@ class OptimizationWorker(QObject):
                 transpiled, backend, wait=None if local else self._wait_for_hardware_job)
             submitted = job is not None
 
-            # The actual measured bitstring counts QI/the emulator returned
-            # for this one real/local job -- previously discarded (captured
-            # as `_results` and never read again), so the Run screen had no
-            # way to show what really came back, only what the LOCAL
-            # training simulation last computed. get_counts() is the
-            # standard Qiskit Result accessor; wrapped defensively since a
-            # real backend's raw result shape isn't something to trust
-            # blindly from here.
             if submitted and job_results is not None:
                 try:
                     real_counts = job_results.get_counts()
@@ -585,9 +497,8 @@ class OptimizationWorker(QObject):
             if submitted:
                 try:
                     record = self.manager.save_job(job)
-                    # The job record has no app settings; store them (and the
-                    # optimizer's outcome) alongside it for the Load screen's
-                    # experiment history.
+                    # The job record has no app settings; store them with the outcome for
+                    # Past Experiments.
                     write_experiment_settings(record.project_dir, {
                         **config.to_json_dict(),
                         "results": {
@@ -657,7 +568,7 @@ class ExperimentWindow(QWidget):
         root.setSpacing(0)
 
         # -------------------------------------------------
-        # Left sidebar — recap, stop, status log
+        # Left sidebar — recap, device status, result, controls
         # -------------------------------------------------
 
         sidebar = QWidget()
@@ -811,12 +722,7 @@ class ExperimentWindow(QWidget):
         self.ideal_counts_canvas.setMinimumHeight(340)
         self.real_counts_canvas.setMinimumHeight(340)
 
-        # 3x2 results grid: live curves, ideal vs. observed ρ_A, and ideal
-        # vs. real measurement histograms -- all three rows the same
-        # always-visible, click-to-expand-as-a-tab pattern (via _card()
-        # below), so the real/ideal counts pair behaves exactly like the
-        # density-matrix pair above it rather than being its own special
-        # collapsible thing.
+        # 3x2 results grid; clicking a card opens it as its own tab (see _card).
         grid = QGridLayout()
         grid.setSpacing(10)
         self._grid = grid
@@ -956,10 +862,8 @@ class ExperimentWindow(QWidget):
         self._draw_ideal_density()
         self._draw_empty_density()
 
-        # Show the ideal histogram for the starting-guess angles right away
-        # (same spirit as _draw_circuit_for above), and clear any previous
-        # run's real counts -- this run's own submission, if it gets that
-        # far, repopulates the real side in _on_finished.
+        # Ideal histogram for the starting angles (emulator only); this run's
+        # measured counts fill the other side when it finishes.
         self._last_real_counts = None
         ideal_probs = None
         if not self._hardware:
@@ -991,16 +895,9 @@ class ExperimentWindow(QWidget):
         self.thread.start()
 
     def _on_thread_finished(self):
-        # self.thread is a plain, unparented QThread(), so Python's own
-        # refcounting owns it — dropping our last reference below triggers
-        # *immediate* C++ destruction via shiboken, independent of (and
-        # potentially racing ahead of) the deleteLater() already queued
-        # above. QThread.finished firing means run() has returned, but
-        # wait() is the actual guarantee the OS thread has fully joined;
-        # skipping it was producing a real
-        # "QThread: Destroyed while thread '' is still running" abort,
-        # reliably reachable once something (e.g. the Run-again button)
-        # creates a new run shortly after the previous one finished.
+        # Wait for the OS thread to end before dropping the last reference:
+        # Python would destroy the QThread at once, aborting with "QThread:
+        # Destroyed while thread is still running".
         if self.thread is not None:
             self.thread.wait()
         self.thread = None
@@ -1060,13 +957,8 @@ class ExperimentWindow(QWidget):
         self.stop_btn.setEnabled(False)
 
     def _on_restart(self):
-        # Re-run the same config from scratch — same starting angles, same
-        # backend/beta/optimizer/iterations — so the live loss/density
-        # animation plays again without a trip back through Setup. Guarded
-        # by is_running too, not just the button's enabled state, since
-        # start_run() tears down and replaces self.thread/self.worker and
-        # doing that while the previous run is still live would orphan it
-        # mid-flight.
+        # Re-run the same config. Guarded by is_running: start_run replaces the
+        # thread and worker, which would orphan a live run.
         if self.config is not None and not self.is_running:
             self.start_run(self.config)
 
@@ -1207,9 +1099,7 @@ class ExperimentWindow(QWidget):
         self._draw_density(result["rho"])
         fidelity = result.get("fidelity")
         if fidelity is not None:
-            # Make sure the live curve's last point matches the reported
-            # result exactly, even if result.x differs slightly from the
-            # last xk the callback saw.
+            # End the live curve on the reported final fidelity.
             final_it = (self.fidelity_x[-1] + 1) if self.fidelity_x else 1
             self._on_fidelity_progress(final_it, fidelity)
         fidelity_line = (
@@ -1224,15 +1114,6 @@ class ExperimentWindow(QWidget):
                else f"Final counts failed: {result.get('submit_error') or 'unknown error'}")
             + (f"\n{result['stop_detail']}" if result.get("stop_detail") else ""))
 
-        # The actual measured counts from the one real/local job this run
-        # submitted -- previously computed and discarded, never shown. Draw
-        # them and auto-expand the panel so a successful submission is
-        # impossible to miss; leave it collapsed (with its placeholder) if
-        # the submission failed or returned nothing to read back. The ideal
-        # side always redraws for the converged angles (even if the real
-        # submission failed, "what should this have produced" is still
-        # worth showing); the real side only fills in when there's
-        # something real to show.
         real_counts = result.get("real_counts")
         self._last_real_counts = real_counts
         ideal_probs = None
@@ -1305,7 +1186,7 @@ class ExperimentWindow(QWidget):
         fig.clear()
         ax = fig.add_subplot(111)
         self._fidelity_ax = ax
-        self._fidelity_expected_line = ax.axhline(
+        ax.axhline(
             1.0, color=Colors.GOOD, alpha=0.55, linewidth=2, linestyle="--",
             zorder=3, label="Perfect (F = 1)")
         self._fidelity_gap_fill = None
@@ -1476,9 +1357,8 @@ class ExperimentWindow(QWidget):
         ax.set_zlabel(r"$|\rho_{ij}|$", labelpad=2, fontsize=10)
         ax.text2D(0.02, 0.98, title, transform=ax.transAxes, fontsize=12,
                    color=Colors.TEXT, va="top")
-        # No in-plot title via ax.set_title(): the panel() card above already
-        # headers it, and a 3D-axes title doesn't respect the panel's width
-        # (it overflows past the canvas edges once the panel gets narrow).
+        # No ax.set_title(): the card already titles it, and a 3D title
+        # overflows narrow panels.
 
         # Colorbar in its own fixed slot at the right edge, clear of the 3D
         # axes' tick numbers.

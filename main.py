@@ -1,24 +1,17 @@
 import sys
 
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import (
-    QApplication,
-    QWidget,
-    QVBoxLayout,
-    QStackedWidget,
-    QMessageBox,
-)
+from PySide6.QtWidgets import QApplication, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
 from backend.qi_manager import QuantumInspireManager
-
-from frontend.colors import Colors, Fonts
-from frontend.topbar import TopBar
-from frontend.login import LoginWindow
-from frontend.home import HomeWindow
-from frontend.upload_browser import UploadBrowserWindow
 from frontend.backend_select import BackendSelectWindow
-from frontend.setup import SetupWindow
+from frontend.colors import Colors, Fonts
 from frontend.experiment import ExperimentWindow
+from frontend.home import HomeWindow
+from frontend.login import LoginWindow
+from frontend.setup import SetupWindow
+from frontend.topbar import TopBar
+from frontend.upload_browser import UploadBrowserWindow
 
 # Share of the screen's available area the window restores to when the
 # user un-maximizes it (see run()).
@@ -79,9 +72,8 @@ def run():
     stack.addWidget(setup)
     stack.addWidget(experiment)
 
-    # Set by open_setup_from_home() while a Start/Tutorial click waits on
-    # BackendSelectWindow's card pick — Load already carries a backend_name
-    # and skips that screen, so this only matters for the other two paths.
+    # Set by open_setup_from_home() while a Start/Tutorial click waits on the
+    # backend card pick (Past Experiments carries its own backend and skips it).
     pending_tutorial = [False]
 
     layout.addWidget(stack)
@@ -143,9 +135,8 @@ def run():
         show_setup()
 
     def load_config_into_setup(config):
-        # A saved session already names a backend, so this skips straight
-        # past card selection — used by both Home's Load and the upload
-        # browser's history/search picks.
+        # A saved session already names its backend, so card selection is
+        # skipped (Past Experiments).
         setup.set_backend(config.backend_name)
         setup.load_config(config)
         setup.set_tutorial_visible(False)

@@ -1,26 +1,18 @@
-"""Session file I/O: parsing/writing the JSON a SessionConfig round-trips
-through (see frontend/session.py for the schema), a native-dialog fallback
-for both directions, and the shared recent-sessions bookkeeping. The primary
-"Load" UI is the searchable frontend/upload_browser.py screen; these
-dialogs are its manual escape hatch (and Setup's "Save" button)."""
+"""Session file I/O: reading and writing the JSON a SessionConfig
+round-trips through (see frontend/session.py for the schema), via native
+file dialogs."""
 
 import json
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from frontend.session import SessionConfig, record_recent_session
+from frontend.session import SessionConfig
 
 
 def parse_session_file(path) -> SessionConfig:
-    """Parse `path` into a SessionConfig, recording it in the recent-
-    sessions history on success. Raises on a missing/invalid file — callers
-    decide how to surface that (see load_session_dialog for the pattern).
-    """
+    """Parse `path` into a SessionConfig. Raises on a missing/invalid file."""
     with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    config = SessionConfig.from_json_dict(data)
-    record_recent_session(path)
-    return config
+        return SessionConfig.from_json_dict(json.load(f))
 
 
 def load_session_dialog(parent):
@@ -51,9 +43,8 @@ def save_session_dialog(parent, config: SessionConfig) -> bool:
     """Prompt for where to save `config` as session JSON via the native
     file-save dialog.
 
-    Returns True on success (and records it in the recent-sessions
-    history), False if the user cancelled or the write failed (a
-    QMessageBox is shown in the latter case).
+    Returns True on success, False if the user cancelled or the write failed
+    (a QMessageBox is shown in the latter case).
     """
     path, _ = QFileDialog.getSaveFileName(
         parent, "Save experiment session", "session.json", "Session JSON (*.json)"
@@ -66,7 +57,6 @@ def save_session_dialog(parent, config: SessionConfig) -> bool:
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(config.to_json_dict(), f, indent=2)
-        record_recent_session(path)
         return True
     except OSError as exc:
         QMessageBox.critical(
