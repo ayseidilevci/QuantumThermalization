@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from backend.experiment_manager import ExperimentManager, ExperimentRecord
 from frontend.colors import Colors
-from frontend.session import SessionConfig
+from frontend.session import SessionConfig, format_beta
 from frontend.upload import load_session_dialog
 
 
@@ -51,7 +51,7 @@ def _describe(record: ExperimentRecord) -> tuple[str, list, str]:
 
     beta = settings.get("beta")
     params = [
-        f"β={beta:.2f}" if isinstance(beta, (int, float)) else None,
+        f"β={format_beta(beta)}" if isinstance(beta, (int, float)) else None,
         settings.get("optimizer"),
         f"{settings['iterations']} iter" if "iterations" in settings else None,
     ]
@@ -112,7 +112,7 @@ class UploadBrowserWindow(QWidget):
         root.setContentsMargins(32, 28, 32, 24)
         root.setSpacing(14)
 
-        title = QLabel("Load an experiment")
+        title = QLabel("Past experiments")
         title_font = QFont()
         title_font.setPointSize(16)
         title_font.setBold(True)

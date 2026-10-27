@@ -33,14 +33,16 @@ from PySide6.QtCore import Qt, QThread, QObject, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QLabel, QPushButton,
-    QPlainTextEdit, QFileDialog, QMessageBox, QTabWidget, QTabBar, QScrollArea,
+    QFileDialog, QMessageBox, QTabWidget, QTabBar, QScrollArea,
 )
 from frontend.plots import MplCanvas, style_axes, panel
 from frontend.device_panel import QubitTopologyWidget, KNOWN_BACKEND_TOPOLOGY, _lookup_by_name
+from frontend.hardware_panels import DeviceStatusWidget, HardwareJobsView
 
 from scipy.optimize import minimize
 
 from qiskit import QuantumCircuit, QuantumRegister, transpile
+from qiskit.providers.jobstatus import JobStatus
 from qiskit.quantum_info import partial_trace, DensityMatrix, state_fidelity, Pauli
 
 from gibbs_tfd_reproduction.tfd_circuit import TFDCircuit
@@ -52,9 +54,13 @@ from gibbs_tfd_reproduction.cost_function import CostFunction
 from qi_utilities.device_simulation.simulators import NoisySimulator
 
 from backend import starmon7
+from backend.spsa import spsa_minimize
 from backend.experiment_manager import PROJECTS_PATH, write_experiment_settings
 from frontend.colors import Colors
-from frontend.session import SessionConfig, DEFAULT_START_ANGLE
+from frontend.session import (
+    SessionConfig, DEFAULT_START_ANGLE, HARDWARE_OPTIMIZER, format_beta, format_temperature,
+    random_start_angles,
+)
 from frontend.upload import save_session_dialog
 from frontend.plots import MplCanvas, style_axes, panel
 
@@ -73,6 +79,23 @@ _LOGICAL_ROLE_ORDER = ("A2", "A1", "B2", "B1")
 # actually watchable during a demo instead of just snapping to the final
 # result. Tune down/remove for real runs where speed matters more.
 _STEP_DELAY_SECONDS = 0.06
+
+# How often a queued hardware job's status is polled, and how the Qiskit
+# job states read in the Hardware jobs tab.
+_POLL_SECONDS = 5
+_JOB_STATUS_TEXT = {
+    JobStatus.INITIALIZING: "Submitted",
+    JobStatus.QUEUED: "Queued",
+    JobStatus.VALIDATING: "Queued",
+    JobStatus.RUNNING: "Running on hardware",
+    JobStatus.DONE: "Results received",
+    JobStatus.ERROR: "Failed",
+    JobStatus.CANCELLED: "Cancelled",
+}
+
+
+def _now() -> str:
+    return datetime.now().strftime("%H:%M:%S")
 
 # Phase colormap for the density-matrix bars: a light/dark ramp in the app's
 # blue instead of a rainbow. Dark at ±π, light at 0 — cyclic, so -π and π
@@ -122,8 +145,7 @@ def _exact_cost(params, beta, varsigma=1.57):
 
 class _Aborted(Exception):
     """Raised from inside scipy's optimizer callback to unwind minimize()
-    cleanly when the user hits Stop (verified against COBYLA/Nelder-Mead/
-    Powell)."""
+    cleanly when the user hits Stop (verified against COBYLA)."""
 
 
 class OptimizationWorker(QObject):
@@ -139,18 +161,106 @@ class OptimizationWorker(QObject):
     finished = Signal(object)
     log = Signal(str)
     step = Signal(float)
+    # One dict per hardware job state change: n, purpose, job_id, status,
+    # submitted, updated (see _wait_for_hardware_job).
+    job_update = Signal(object)
 
     def __init__(self, manager, config: SessionConfig):
         super().__init__()
         self.manager = manager
         self.config = config
         self._abort = False
+        self._job_count = 0
+        self._job_purpose = ""
+        # What happened to the job that was waiting when Stop was pressed.
+        self._stop_detail = None
 
     def abort(self):
         self._abort = True
 
+    def _make_cost_function(self, local: bool):
+        """The cost runs on an ideal Starmon-7 simulation for the emulator and
+        on the device itself for real hardware. Returns (cost function, max
+        circuits per job — None when unlimited)."""
+        config = self.config
+        layout = ([config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
+                  if config.is_qubit_mapping_complete() else None)
+        if local:
+            kwargs = {"initial_layout": layout} if layout else {}
+            backend = NoisySimulator(starmon7.NAME, ideal_simulation=True)
+            return CostFunction(varsigma=1.57, backend=backend, **kwargs), None
+        if layout is None:
+            raise ValueError("assign all four qubits (A1, A2, B1, B2) on the Setup screen first")
+        backend = self.manager.get_backend(config.backend_name)
+        max_circuits = backend.get_backend_type().max_jobs_per_batch_job
+        cost_fn = CostFunction(varsigma=1.57, backend=backend, initial_layout=layout,
+                               wait_for_result=self._wait_for_hardware_job)
+        return cost_fn, max_circuits
+
+    def _wait_for_hardware_job(self, job):
+        """Poll a submitted hardware job until its results are in, reporting
+        each state change (job_update) and honouring Stop. Replaces
+        QIJob.result()'s default wait, which gives up after 60 s."""
+        self._job_count += 1
+        info = {"n": self._job_count, "purpose": self._job_purpose,
+                "job_id": str(getattr(job, "batch_job_id", None) or job.job_id()),
+                "status": "Submitted", "submitted": _now(), "updated": _now()}
+        self.job_update.emit(dict(info))
+        self.log.emit(f"Job {info['job_id']} submitted ({info['purpose']}).")
+
+        def set_status(text):
+            if text != info["status"]:
+                info.update(status=text, updated=_now())
+                self.job_update.emit(dict(info))
+                self.log.emit(f"Job {info['job_id']}: {text}.")
+
+        connection_error = False
+        while True:
+            if self._abort:
+                cancelled, detail = self.manager.cancel_job(job)
+                info["detail"] = detail
+                set_status("Cancelled" if cancelled else "Not cancelled")
+                self._stop_detail = (
+                    f"Job {info['job_id']} was {detail}." if cancelled else
+                    f"Job {info['job_id']} could not be cancelled: {detail}. "
+                    f"It will still run on {self.config.backend_name}.")
+                self.log.emit(self._stop_detail)
+                raise _Aborted()
+            try:
+                status = job.status()
+                connection_error = False
+            except Exception as exc:
+                # A dropped connection mustn't lose the job: keep polling.
+                if not connection_error:
+                    self.log.emit(f"Couldn't check job {info['job_id']} ({exc}); retrying.")
+                connection_error = True
+                status = None
+            if status is not None:
+                if status == JobStatus.DONE:
+                    break
+                set_status(_JOB_STATUS_TEXT.get(status, status.name.title()))
+                if status in (JobStatus.ERROR, JobStatus.CANCELLED):
+                    raise RuntimeError(f"job {info['job_id']} ended as {status.name}")
+            self._sleep_unless_aborted(_POLL_SECONDS)
+
+        result = job.result(wait_for_results=False)
+        set_status("Results received" if result.success else "Failed")
+        return result
+
+    def _sleep_unless_aborted(self, seconds):
+        end = time.monotonic() + seconds
+        while not self._abort and time.monotonic() < end:
+            time.sleep(0.2)
+
     def run(self):
         config = self.config
+        local = starmon7.is_starmon7(config.backend_name)
+        optimizer = config.optimizer if local else HARDWARE_OPTIMIZER
+        if optimizer != config.optimizer:
+            # Setup already enforces this; a restored session could still
+            # carry another optimizer.
+            self.log.emit(f"Real hardware runs use {HARDWARE_OPTIMIZER} "
+                          f"(suggested for noisy setups), not {config.optimizer}.")
         x0 = np.array([config.gamma1, config.gamma2, config.alpha1, config.alpha2])
         if np.allclose(x0, 0.0):
             # All-zero angles are a saddle of the cost at beta > 0 (see
@@ -160,8 +270,21 @@ class OptimizationWorker(QObject):
                 f"All starting angles are 0, a saddle point of the cost for beta > 0 "
                 f"-- starting from {DEFAULT_START_ANGLE} instead.")
         iteration = [0]
-        betas = [b for b in (1e-8, 0.5, 1, 5) if b < config.beta] + [config.beta]
+        if local:
+            # Chain experiment: warm-start up a ladder of betas, each step
+            # starting from the previous step's optimum.
+            betas = [b for b in (1e-8, 0.5, 1, 5) if b < config.beta] + [config.beta]
+        else:
+            # Cold start: one optimization straight at the target beta from
+            # random angles. Far fewer hardware jobs than the chain, for
+            # practically the same result.
+            betas = [config.beta]
+            x0 = random_start_angles(np.random.default_rng())
+            self.log.emit(
+                "Cold start from random angles  γ₁={:.3f}  γ₂={:.3f}  α₁={:.3f}  α₂={:.3f}"
+                .format(*x0))
         current_beta = [betas[0]]
+        start_params = x0.copy()
 
         # Live, incremental progress log: one line appended on every single
         # optimizer iteration (see callback() below), independent of
@@ -186,19 +309,17 @@ class OptimizationWorker(QObject):
             self.log.emit(f"Couldn't compute the true Gibbs state: {exc}")
             target = None
 
-        # The cost is always evaluated on an ideal Starmon-7 simulation. When
-        # Starmon-7 is also the chosen backend, use the user's own qubit
-        # assignment; otherwise keep CostFunction's default valid layout
-        # (a mapping for another chip needn't fit Starmon-7's coupling map).
-        cost_kwargs = {}
-        if starmon7.is_starmon7(config.backend_name) and config.is_qubit_mapping_complete():
-            cost_kwargs["initial_layout"] = [
-                config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
-        cost_fn = CostFunction(
-            varsigma=1.57,
-            backend=NoisySimulator(starmon7.NAME, ideal_simulation=True),
-            **cost_kwargs,
-        )
+        try:
+            cost_fn, max_circuits = self._make_cost_function(local)
+        except Exception as exc:
+            self.log.emit(f"Couldn't set up {config.backend_name}: {exc}")
+            self.finished.emit({"aborted": True, "error": str(exc)})
+            return
+        if not local:
+            self.log.emit(
+                f"Every cost evaluation runs on {config.backend_name}: one job per "
+                f"iteration, each waiting in the device's queue. Follow them in the "
+                f"Hardware jobs tab.")
 
         # The live density-matrix preview is by far the most expensive thing
         # to redraw (a full 3D bar plot + colorbar rebuild, ~20-100ms each),
@@ -213,13 +334,12 @@ class OptimizationWorker(QObject):
         # iteration count. Fidelity itself is just linear algebra on a 4x4
         # matrix (no redraw of an expensive 3D plot involved) so, unlike the
         # density preview, it doesn't need the same throttling.
-        rho_every = max(1, config.iterations // 20)
+        rho_every = max(1, config.iterations // 20) if local else 1
 
         # Every cost evaluation of the current beta step as (params, cost,
         # rho_A). The live plots must show the optimizer's current point xk,
         # not whatever was evaluated last: optimizers probe trial points
-        # (COBYLA's model steps, Nelder-Mead's reflections, Powell's line
-        # searches) that they then reject, and plotting those made healthy
+        # (COBYLA's model steps) that they then reject, and plotting those made healthy
         # runs look erratic. xk is always one of the evaluated points, so
         # it's looked up here instead of re-running circuits for it.
         evaluations = []
@@ -235,14 +355,15 @@ class OptimizationWorker(QObject):
             # Fall back to the latest evaluation if xk somehow wasn't evaluated.
             return evaluations[i] if dists[i] < 1e-9 else evaluations[-1]
 
-        def callback(xk):
-            if self._abort:
-                raise _Aborted()
+        def report(xk, current_cost, rho_a):
+            """Live plots + on-disk log for the optimizer's current point."""
             iteration[0] += 1
-            _, current_cost, rho_a = evaluation_at(np.asarray(xk, dtype=float))
-            bound = CostFunction.cost_lower_bound(current_beta[0])
-            cost = (current_cost - bound) / abs(bound)
-            self.progress.emit(iteration[0], float(cost))
+            if local:
+                bound = CostFunction.cost_lower_bound(current_beta[0])
+                self.progress.emit(iteration[0], float((current_cost - bound) / abs(bound)))
+            else:
+                # Real hardware: plot the cost exactly as the device measured it.
+                self.progress.emit(iteration[0], float(current_cost))
             fid = None
             try:
                 if iteration[0] % rho_every == 0:
@@ -264,15 +385,54 @@ class OptimizationWorker(QObject):
                         "iteration": iteration[0],
                         "gamma1": float(xk[0]), "gamma2": float(xk[1]),
                         "alpha1": float(xk[2]), "alpha2": float(xk[3]),
-                        "cost": float(cost_fn.cost_history[-1]),
+                        "cost": float(current_cost),
                         "fidelity": fid,
                     }) + "\n")
             except Exception:
                 pass  # a logging hiccup shouldn't kill the optimization
-            time.sleep(_STEP_DELAY_SECONDS)
+            if local:
+                time.sleep(_STEP_DELAY_SECONDS)
+
+        def callback(xk):
+            if self._abort:
+                raise _Aborted()
+            _, current_cost, rho_a = evaluation_at(np.asarray(xk, dtype=float))
+            report(xk, current_cost, rho_a)
+
+        def spsa_callback(xk):
+            # SPSA's iterate was already reported by spsa_batch.
+            if self._abort:
+                raise _Aborted()
+
+        def spsa_batch(points, current, beta):
+            """One SPSA round in as few jobs as the backend allows: the probe
+            points plus — for the live plots — the current iterate with its
+            tomography. On Tuna (5 circuits per job) that's one job."""
+            requests = [(np.asarray(p, dtype=float), False) for p in points]
+            if current is not None:
+                requests.append((np.asarray(current, dtype=float), True))
+            jobs, size = [[]], 0
+            for request in requests:
+                need = 2 if request[1] else 1
+                if max_circuits and jobs[-1] and size + need > max_circuits:
+                    jobs.append([])
+                    size = 0
+                jobs[-1].append(request)
+                size += need
+            purpose = "SPSA calibration" if current is None else f"Iteration {iteration[0] + 1}"
+            out = []
+            for k, chunk in enumerate(jobs):
+                self._job_purpose = purpose + (f" ({k + 1}/{len(jobs)})" if len(jobs) > 1 else "")
+                out.extend(cost_fn.evaluate_batch(
+                    [params for params, _ in chunk], beta,
+                    tomography_for=[i for i, (_, tomo) in enumerate(chunk) if tomo]))
+            if current is not None:
+                current_cost, rho_a = out[-1]
+                report(current, current_cost, rho_a)
+            return [cost for cost, _ in out[:len(points)]]
 
         self.log.emit(
-            f"Starting optimization  |  beta={config.beta}  optimizer={config.optimizer}")
+            f"Starting optimization  |  beta={config.beta}  optimizer={optimizer}")
 
         try:
             for b in betas:
@@ -280,20 +440,29 @@ class OptimizationWorker(QObject):
                 self.step.emit(b)
                 self.log.emit(f"Optimizing at beta={b}")
                 evaluations.clear()
-                options = {'maxiter': config.iterations}
-                if config.optimizer == "COBYLA":
-                    # Same initial step as CostFunction.minimize_cost. The
-                    # default 1.0 stalls more often near the zero-angle saddle.
-                    options['rhobeg'] = 0.5
-                result = minimize(
-                    evaluate, x0=x0, args=(b,), method=config.optimizer,
-                    options=options, callback=callback,
-                )
+                if optimizer == "SPSA":
+                    result = spsa_minimize(
+                        lambda points, current, b=b: spsa_batch(points, current, b), x0,
+                        maxiter=config.iterations, callback=spsa_callback)
+                else:
+                    options = {'maxiter': config.iterations}
+                    if optimizer == "COBYLA":
+                        # Same initial step as CostFunction.minimize_cost. The
+                        # default 1.0 stalls more often near the zero-angle saddle.
+                        options['rhobeg'] = 0.5
+                    result = minimize(
+                        evaluate, x0=x0, args=(b,), method=optimizer,
+                        options=options, callback=callback,
+                    )
                 x0 = result.x
             final_params = result.x
+            self._job_purpose = "Final state"
+            final_cost, rho_final = cost_fn.evaluate_batch(
+                [final_params], config.beta, tomography_for=(0,))[0]
+            final_cost = float(final_cost)
         except _Aborted:
             self.log.emit(f"Aborted. Progress up to this point is saved in {self.live_log_path}")
-            self.finished.emit({"aborted": True})
+            self.finished.emit({"aborted": True, "stop_detail": self._stop_detail})
             return
         except Exception as exc:
             self.log.emit(f"Optimization failed: {exc}")
@@ -302,8 +471,6 @@ class OptimizationWorker(QObject):
             return
 
         final_circuit = TFDCircuit(*final_params)
-        final_cost = float(cost_fn.cost_function(final_params, config.beta))
-        rho_final = cost_fn.tomography_history[-1]
 
         # How good the prepared state actually is, not just how low the
         # (engineered, proxy) cost got: fidelity against the true Gibbs
@@ -317,13 +484,16 @@ class OptimizationWorker(QObject):
             except Exception as exc:
                 self.log.emit(f"Couldn't compute final fidelity: {exc}")
 
-        local = starmon7.is_starmon7(config.backend_name)
         self.log.emit(
             "Optimization complete. Running circuit on the Starmon-7 emulator..." if local
             else "Optimization complete. Submitting circuit to Quantum Inspire...")
         submitted = False
+        submit_error = None
+        # Set before the try: a failure before submission must still reach
+        # finished.emit below instead of crashing on an unbound name.
+        real_counts = None
         try:
-            backend = self.manager.get_backend(config.backend_name)
+            backend = self.manager.get_backend(config.backend_name) if local else cost_fn.backend
             initial_layout = [config.qubit_mapping[role] for role in _LOGICAL_ROLE_ORDER]
             qc = final_circuit.as_qiskit_circuit()
             # Always measure, for every backend -- local or real. This used
@@ -342,7 +512,9 @@ class OptimizationWorker(QObject):
             measured.measure(range(qc.num_qubits), range(qc.num_qubits))
             qc = measured
             transpiled = transpile(qc, backend, initial_layout=initial_layout)
-            job, job_results = self.manager.submit_circuit(transpiled, backend)
+            self._job_purpose = "Final counts"
+            job, job_results = self.manager.submit_circuit(
+                transpiled, backend, wait=None if local else self._wait_for_hardware_job)
             submitted = job is not None
 
             # The actual measured bitstring counts QI/the emulator returned
@@ -353,7 +525,6 @@ class OptimizationWorker(QObject):
             # standard Qiskit Result accessor; wrapped defensively since a
             # real backend's raw result shape isn't something to trust
             # blindly from here.
-            real_counts = None
             if submitted and job_results is not None:
                 try:
                     real_counts = job_results.get_counts()
@@ -374,6 +545,11 @@ class OptimizationWorker(QObject):
                                 (float(p) for p in final_params))),
                             "final_cost": final_cost,
                             "fidelity": fidelity,
+                            "protocol": "chain" if local else "cold start",
+                            "optimizer_used": optimizer,
+                            "start_params": dict(zip(
+                                ("gamma1", "gamma2", "alpha1", "alpha2"),
+                                (float(p) for p in start_params))),
                             "job_id": str(self.manager.get_job_id(job)),
                             "live_log": str(self.live_log_path),
                         },
@@ -381,8 +557,11 @@ class OptimizationWorker(QObject):
                     self.log.emit(f"Saved to {record.project_dir}")
                 except Exception as exc:
                     self.log.emit(f"Job ran but couldn't be saved locally: {exc}")
+            if not submitted:
+                submit_error = "the backend returned no job"
             self.log.emit("Submitted." if submitted else "Submission returned no job.")
         except Exception as exc:
+            submit_error = str(exc)
             self.log.emit(f"Submission failed: {exc}")
 
         self.finished.emit({
@@ -392,7 +571,9 @@ class OptimizationWorker(QObject):
             "rho": rho_final,
             "fidelity": fidelity,
             "submitted": submitted,
+            "submit_error": submit_error,
             "real_counts": real_counts,
+            "stop_detail": self._stop_detail,
         })
 
 
@@ -417,6 +598,7 @@ class ExperimentWindow(QWidget):
         self._ideal_zmax = None
         self._graphs = {}
         self._tab_pages = {}
+        self._hardware = False
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -444,13 +626,18 @@ class ExperimentWindow(QWidget):
         self.recap_form = QFormLayout()
         self.recap_form.setVerticalSpacing(6)
         self._recap_labels = {}
-        for key in ("Backend", "β", "Optimizer", "Iterations", "γ, α (initial)", "Qubits"):
+        for key in ("Backend", "β", "Optimizer", "Max iterations", "γ, α (initial)", "Qubits"):
             lbl = QLabel("–")
             lbl.setWordWrap(True)
             lbl.setStyleSheet(f"color: {Colors.TEXT};")
             self._recap_labels[key] = lbl
             self.recap_form.addRow(f"{key}:", lbl)
         side.addLayout(self.recap_form)
+
+        # Real-hardware runs only (see start_run).
+        self.device_status = DeviceStatusWidget()
+        self.device_status.hide()
+        side.addWidget(self.device_status)
 
         self.qubit_view = QubitTopologyWidget()
         self.qubit_view.set_read_only(True)
@@ -512,23 +699,6 @@ class ExperimentWindow(QWidget):
         self.restart_btn.clicked.connect(self._on_restart)
         side.addWidget(self.restart_btn)
 
-        status_lbl = QLabel("Status")
-        status_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-weight: 600;")
-        side.addWidget(status_lbl)
-
-        self.status_log = QPlainTextEdit()
-        self.status_log.setReadOnly(True)
-        self.status_log.setMaximumBlockCount(500)
-        self.status_log.setStyleSheet(f"""
-            QPlainTextEdit {{
-                background: {Colors.BG_3}; color: {Colors.TEXT_DIM};
-                border: 1px solid {Colors.BORDER}; border-radius: 8px;
-                font-family: monospace; font-size: 9pt;
-            }}
-        """)
-        self.status_log.setFixedHeight(140)
-        side.addWidget(self.status_log)
-
         back_btn = QPushButton("←  Back to Setup")
         back_btn.setCursor(Qt.PointingHandCursor)
         back_btn.setStyleSheet(f"""
@@ -567,7 +737,7 @@ class ExperimentWindow(QWidget):
         params_row.setContentsMargins(16, 8, 16, 8)
         params_row.setSpacing(28)
         self._param_strip_labels = {}
-        for key in ("Backend", "β", "Optimizer", "Iterations", "Qubits"):
+        for key in ("Backend", "β", "Optimizer", "Max iterations", "Qubits"):
             lbl = QLabel()
             lbl.setTextFormat(Qt.RichText)
             lbl.setText(f"<span style='color:{Colors.TEXT_DIM};'>{key}</span>&nbsp;&nbsp;–")
@@ -597,6 +767,7 @@ class ExperimentWindow(QWidget):
         # collapsible thing.
         grid = QGridLayout()
         grid.setSpacing(10)
+        self._grid = grid
         def _card(key, title, canvas, save):
             card = panel(title, canvas)
             self._graphs[key] = (title, canvas, save, card)
@@ -680,6 +851,9 @@ class ExperimentWindow(QWidget):
         self.tabs.tabBar().setTabButton(0, QTabBar.LeftSide, None)
         self.tabs.currentChanged.connect(self._rehome)
         self.tabs.tabCloseRequested.connect(self._close_tab)
+
+        # Inserted next to Overview for real-hardware runs (see start_run).
+        self.jobs_view = HardwareJobsView()
         for key in self._graphs:
             self._make_clickable(key)
         root.addWidget(self.tabs, stretch=1)
@@ -700,6 +874,7 @@ class ExperimentWindow(QWidget):
 
     def start_run(self, config: SessionConfig):
         self.config = config
+        self._show_hardware_panels(not starmon7.is_starmon7(config.backend_name))
         self._last_params = None
         self.save_session_btn.setEnabled(False)
         self.restart_btn.setEnabled(False)
@@ -713,7 +888,7 @@ class ExperimentWindow(QWidget):
         else:
             self.qubit_view.hide()
         self.result_lbl.setText("")
-        self.status_log.clear()
+        self.result_lbl.setStyleSheet(f"color: {Colors.GOOD}; font-weight: 600;")
         self.init_loss_plot()
         self.init_fidelity_plot()
         self._draw_circuit_for(
@@ -734,13 +909,14 @@ class ExperimentWindow(QWidget):
         # run's real counts -- this run's own submission, if it gets that
         # far, repopulates the real side in _on_finished.
         self._last_real_counts = None
-        try:
-            ideal_probs = TFDCircuit(
-                config.gamma1, config.gamma2, config.alpha1, config.alpha2,
-            ).get_state_vector().probabilities_dict()
-        except Exception as exc:
-            self._on_log(f"Couldn't compute the ideal measurement histogram: {exc}")
-            ideal_probs = None
+        ideal_probs = None
+        if not self._hardware:
+            try:
+                ideal_probs = TFDCircuit(
+                    config.gamma1, config.gamma2, config.alpha1, config.alpha2,
+                ).get_state_vector().probabilities_dict()
+            except Exception as exc:
+                self._on_log(f"Couldn't compute the ideal measurement histogram: {exc}")
         self._last_ideal_probs = ideal_probs
         self._render_counts_pair(ideal_probs, None)
 
@@ -755,6 +931,7 @@ class ExperimentWindow(QWidget):
         self.worker.finished.connect(self._on_finished)
         self.worker.finished.connect(self.thread.quit)
         self.worker.step.connect(self._on_step)
+        self.worker.job_update.connect(self.jobs_view.update_job)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.finished.connect(self._on_thread_finished)
 
@@ -776,6 +953,51 @@ class ExperimentWindow(QWidget):
             self.thread.wait()
         self.thread = None
         self.worker = None
+        self.device_status.stop()
+
+    def _show_hardware_panels(self, hardware: bool):
+        """Device status in the sidebar and a Hardware jobs tab next to
+        Overview, for real-hardware runs only. A hardware run shows only what
+        the device measured: the statevector histogram is hidden, the
+        measured counts take the full row, and the reference density matrix
+        is labelled as the exact target it is."""
+        self._hardware = hardware
+        ideal_counts_card = self._graphs["ideal_counts"][3]
+        real_counts_card = self._graphs["real_counts"][3]
+        self._grid.removeWidget(real_counts_card)
+        if hardware:
+            ideal_counts_card.hide()
+            self._grid.addWidget(real_counts_card, 2, 0, 1, 2)
+        else:
+            ideal_counts_card.show()
+            self._grid.addWidget(real_counts_card, 2, 1)
+        self._set_card_title("real_counts", f"Measured counts ({self.config.backend_name})"
+                             if hardware else "Measured counts (Starmon-7 emulator)")
+        self._set_card_title("measured", f"Measured density matrix (tomography on "
+                             f"{self.config.backend_name})" if hardware
+                             else "Measured density matrix (tomography)")
+        self._set_card_title("ideal", "Target density matrix (exact Gibbs state)")
+        self._set_card_title("loss", f"Measured cost on {self.config.backend_name} (live)"
+                             if hardware else "Cost function (live)")
+        self.jobs_view.clear()
+        jobs_index = self.tabs.indexOf(self.jobs_view)
+        if hardware:
+            self.device_status.start(self.manager, self.config.backend_name)
+            self.device_status.show()
+            if jobs_index < 0:
+                jobs_index = self.tabs.insertTab(1, self.jobs_view, "Hardware jobs")
+                self.tabs.tabBar().setTabButton(jobs_index, QTabBar.RightSide, None)
+                self.tabs.tabBar().setTabButton(jobs_index, QTabBar.LeftSide, None)
+        else:
+            self.device_status.stop()
+            self.device_status.hide()
+            if jobs_index >= 0:
+                self.tabs.removeTab(jobs_index)
+
+    def _set_card_title(self, key: str, title: str):
+        card = self._graphs[key][3]
+        card.findChild(QLabel, "cardTitle").setText(title)
+        self._graphs[key] = (title,) + self._graphs[key][1:]
 
     def stop(self):
         if self.worker is not None:
@@ -842,9 +1064,9 @@ class ExperimentWindow(QWidget):
             canvas.draw_idle()
 
     def _close_tab(self, index):
-        if index == 0:
-            return
         page = self.tabs.widget(index)
+        if index == 0 or page is self.jobs_view:
+            return
         key = next(k for k, (p, _) in self._tab_pages.items() if p is page)
         _, canvas, _, card = self._graphs[key]
         card.layout().addWidget(canvas)
@@ -857,13 +1079,19 @@ class ExperimentWindow(QWidget):
     # -----------------------------------------------------
 
     def _update_recap(self, config: SessionConfig):
+        # What actually runs: real hardware always cold-starts from random
+        # angles with HARDWARE_OPTIMIZER (see OptimizationWorker.run).
+        local = starmon7.is_starmon7(config.backend_name)
+        optimizer = config.optimizer if local else HARDWARE_OPTIMIZER
         self._recap_labels["Backend"].setText(config.backend_name)
-        self._recap_labels["β"].setText(f"{config.beta:.2f}")
-        self._recap_labels["Optimizer"].setText(config.optimizer)
-        self._recap_labels["Iterations"].setText(str(config.iterations))
+        beta_text = f"{format_beta(config.beta)}   ({format_temperature(config.beta, config.kb_unit)})"
+        self._recap_labels["β"].setText(beta_text)
+        self._recap_labels["Optimizer"].setText(optimizer)
+        self._recap_labels["Max iterations"].setText(str(config.iterations))
         self._recap_labels["γ, α (initial)"].setText(
             f"γ₁={config.gamma1:.2f}  γ₂={config.gamma2:.2f}\n"
-            f"α₁={config.alpha1:.2f}  α₂={config.alpha2:.2f}")
+            f"α₁={config.alpha1:.2f}  α₂={config.alpha2:.2f}" if local
+            else "random (cold start)")
         mapping = config.qubit_mapping or {}
         qubits = "  ".join(f"{role}→q{mapping[role]}" for role in ("A1", "A2", "B1", "B2")
                            if role in mapping) or "–"
@@ -871,9 +1099,9 @@ class ExperimentWindow(QWidget):
 
         strip_values = {
             "Backend": config.backend_name,
-            "β": f"{config.beta:.2f}",
-            "Optimizer": config.optimizer,
-            "Iterations": str(config.iterations),
+            "β": beta_text,
+            "Optimizer": optimizer,
+            "Max iterations": str(config.iterations),
             "Qubits": qubits,
         }
         for key, value in strip_values.items():
@@ -882,7 +1110,9 @@ class ExperimentWindow(QWidget):
                 f"<b style='color:{Colors.TEXT};'>{value}</b>")
 
     def _on_log(self, message: str):
-        self.status_log.appendPlainText(message)
+        # No on-screen log: outcomes show in the sidebar's result text and
+        # the Hardware jobs tab. Keep the trail on the console for debugging.
+        print(message, flush=True)
 
     def _on_step(self, beta: float):
         for ax, xs in ((self._loss_ax, self.loss_x), (self._fidelity_ax, self.fidelity_x)):
@@ -904,6 +1134,11 @@ class ExperimentWindow(QWidget):
         self.stop_btn.setEnabled(False)
         self.restart_btn.setEnabled(True)  # retry allowed whether this run succeeded, failed, or was stopped
         if result.get("aborted"):
+            if result.get("error"):
+                self._show_outcome(f"Run failed: {result['error']}", Colors.BAD)
+            else:
+                self._show_outcome("Stopped.\n" + (result.get("stop_detail") or
+                                   "No job was waiting at Quantum Inspire."), Colors.WARN)
             return
         params = result["params"]
         self._last_params = params
@@ -923,12 +1158,13 @@ class ExperimentWindow(QWidget):
             f"Fidelity to true Gibbs state: {fidelity:.4f}\n" if fidelity is not None
             else "")
         self.result_lbl.setText(
-            f"Converged  |  final cost={result['cost']:.4f}\n"
+            f"Finished  |  final cost={result['cost']:.4f}\n"
             f"γ₁={params[0]:.3f} γ₂={params[1]:.3f} "
             f"α₁={params[2]:.3f} α₂={params[3]:.3f}\n"
             + fidelity_line
-            + ("Submitted to backend." if result.get("submitted")
-               else "Submission did not complete — see status log."))
+            + ("Final counts received." if result.get("submitted")
+               else f"Final counts failed: {result.get('submit_error') or 'unknown error'}")
+            + (f"\n{result['stop_detail']}" if result.get("stop_detail") else ""))
 
         # The actual measured counts from the one real/local job this run
         # submitted -- previously computed and discarded, never shown. Draw
@@ -941,13 +1177,18 @@ class ExperimentWindow(QWidget):
         # something real to show.
         real_counts = result.get("real_counts")
         self._last_real_counts = real_counts
-        try:
-            ideal_probs = TFDCircuit(*params).get_state_vector().probabilities_dict()
-        except Exception as exc:
-            self._on_log(f"Couldn't compute the ideal measurement histogram: {exc}")
-            ideal_probs = None
+        ideal_probs = None
+        if not self._hardware:
+            try:
+                ideal_probs = TFDCircuit(*params).get_state_vector().probabilities_dict()
+            except Exception as exc:
+                self._on_log(f"Couldn't compute the ideal measurement histogram: {exc}")
         self._last_ideal_probs = ideal_probs
         self._render_counts_pair(ideal_probs, real_counts)
+
+    def _show_outcome(self, text: str, color: str):
+        self.result_lbl.setStyleSheet(f"color: {color}; font-weight: 600;")
+        self.result_lbl.setText(text)
 
     # -----------------------------------------------------
     # Plotting
@@ -968,9 +1209,18 @@ class ExperimentWindow(QWidget):
         self._loss_line.set_label("Cost")
         # No in-plot title: the panel card already says "Cost function", and
         # the legend strip goes where a title would be.
-        style_axes(ax, xlabel="Iteration", ylabel="Relative gap to lower bound")
-        self._loss_bound = 0.0
-        ax.axhline(0.0, color=Colors.GOOD, linestyle="--", linewidth=1.8, label="Lower bound")
+        if self._hardware and self.config is not None:
+            # Raw cost as measured on the device; the exact minimum is only
+            # a reference line.
+            self._loss_line.set_label("Measured cost C")
+            style_axes(ax, xlabel="Iteration", ylabel="Cost C (measured)")
+            self._loss_bound = CostFunction.cost_lower_bound(self.config.beta)
+            ax.axhline(self._loss_bound, color=Colors.GOOD, linestyle="--", linewidth=1.8,
+                       label="Theoretical minimum")
+        else:
+            style_axes(ax, xlabel="Iteration", ylabel="Relative gap to lower bound")
+            self._loss_bound = 0.0
+            ax.axhline(0.0, color=Colors.GOOD, linestyle="--", linewidth=1.8, label="Lower bound")
         _legend_above(ax)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         self.loss_canvas.draw()
@@ -998,10 +1248,13 @@ class ExperimentWindow(QWidget):
         self._fidelity_ax = ax
         self._fidelity_expected_line = ax.axhline(
             1.0, color=Colors.GOOD, alpha=0.55, linewidth=2, linestyle="--",
-            zorder=3, label="Expected (ideal)")
+            zorder=3, label="Perfect (F = 1)")
         self._fidelity_gap_fill = None
         (self._fidelity_line,) = ax.plot([], [], "-", color=Colors.ACCENT, linewidth=2.2,
-                                          solid_capstyle="round", zorder=2, label="Observed")
+                                          solid_capstyle="round", zorder=2,
+                                          label=f"Measured on {self.config.backend_name}"
+                                          if self._hardware and self.config is not None
+                                          else "Observed")
         (self._fidelity_head,) = ax.plot([], [], "o", color=Colors.ACCENT_HOVER,
                                           markersize=6, markeredgecolor=Colors.BG_3,
                                           markeredgewidth=1.2, zorder=2)

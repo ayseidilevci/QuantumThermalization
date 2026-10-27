@@ -21,11 +21,12 @@ from PySide6.QtGui import QFont, QPixmap, QImage, QPainter, QColor, QLinearGradi
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QSizePolicy, QScrollArea,
+    QSizePolicy, QScrollArea, QMessageBox,
 )
 
 from frontend.colors import Colors
 from frontend.device_panel import BACKEND_IMAGES, _lookup_by_name
+from backend import starmon7
 from backend.qi_manager import classify_backend_status, STATE_OFFLINE, STATE_ONLINE
 
 MIN_CARD_SIZE = QSize(110, 180)
@@ -358,4 +359,22 @@ class BackendSelectWindow(QWidget):
         return content
 
     def _on_card_clicked(self, name: str, qi_backend):
+        if not starmon7.is_starmon7(name) and not self._confirm_real_device(name):
+            return
         self.backend_chosen.emit(name, qi_backend)
+
+    def _confirm_real_device(self, name: str) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Real quantum computer")
+        box.setText(f"{name} is a real quantum computer.")
+        box.setInformativeText(
+            "Experiments on it are sent to Quantum Inspire's real hardware. Jobs "
+            "wait in the device's queue, so a run can take significantly longer "
+            "than on the emulator.\n\n"
+            "Real hardware runs use a cold start from random angles with SPSA.")
+        go = box.addButton("Use this device", QMessageBox.AcceptRole)
+        box.addButton("Choose another", QMessageBox.RejectRole)
+        box.setDefaultButton(go)
+        box.exec()
+        return box.clickedButton() is go

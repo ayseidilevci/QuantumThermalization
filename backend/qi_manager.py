@@ -4,6 +4,9 @@ from typing import Any, Callable
 import threading
 import webbrowser
 
+from compute_api_client import ApiClient, JobsApi
+from qi2_shared.client import config as qi_config
+from qi2_shared.utils import run_async
 from qiskit_quantuminspire.qi_provider import QIProvider
 
 from qi_utilities.utility_functions.data_handling import StoreProjectRecord, RetrieveProjectRecord
@@ -244,9 +247,12 @@ class QuantumInspireManager:
             for info in self.backends
         }
 
-    def submit_circuit(self, circuit, backend):
+    def submit_circuit(self, circuit, backend, wait=None):
         """
         Submit a Qiskit QuantumCircuit to the selected QI backend.
+
+        wait(job) -> Result, if given, replaces job.result(): a real
+        device's queue easily outlasts QIJob.result()'s 60 s default.
         """
 
         print("========================================")
@@ -269,7 +275,7 @@ class QuantumInspireManager:
             print("\nJob submitted successfully.")
 
             print("\nWaiting for results...")
-            results = job.result()
+            results = wait(job) if wait else job.result()
 
             # A local SimulatorJob only fills circuits_run_data in result().
             print("Job ID:", job.circuits_run_data[0].job_id)
@@ -302,6 +308,47 @@ class QuantumInspireManager:
         self.provider = QIProvider()
 
         return self.provider.get_backend(name)
+
+    def cancel_job(self, job) -> tuple[bool, str]:
+        """Try to withdraw a submitted batch job from the device's queue.
+
+        QI has no "cancel" endpoint, but every circuit in a batch job is a
+        separate job that can be deleted. Deleting them is attempted, then
+        the jobs are read back so the answer reflects what QI actually did
+        (it may refuse, e.g. once a job is already running). Returns
+        (cancelled, detail).
+        """
+        job_ids = [data.job_id for data in getattr(job, "circuits_run_data", [])
+                   if data.job_id is not None]
+        if not job_ids:
+            return False, "no QI job ids known for this job"
+
+        async def delete_and_check():
+            async with ApiClient(qi_config()) as client:
+                api = JobsApi(client)
+                errors = []
+                for job_id in job_ids:
+                    try:
+                        await api.delete_job_jobs_id_delete(job_id)
+                    except Exception as exc:
+                        errors.append(f"job {job_id}: {getattr(exc, 'status', '')} "
+                                      f"{getattr(exc, 'reason', None) or exc}".strip())
+                page = await api.read_jobs_jobs_get(batch_job_id=job.batch_job_id)
+                remaining = [item for item in page.items if item.id in job_ids]
+                return errors, remaining
+
+        try:
+            errors, remaining = run_async(delete_and_check())
+        except Exception as exc:
+            return False, f"couldn't reach Quantum Inspire ({exc})"
+        if not remaining:
+            return True, "deleted from the queue"
+        states = ", ".join(sorted({str(getattr(item.status, "value", item.status))
+                                   for item in remaining}))
+        detail = f"still at QI ({states})"
+        if errors:
+            detail += "; " + "; ".join(errors)
+        return False, detail
 
     def get_job_id(self, job):
         return job.circuits_run_data[0].job_id

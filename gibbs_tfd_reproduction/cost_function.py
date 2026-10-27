@@ -27,15 +27,22 @@ from tomography import build_tomography_circuit, reconstruct_density_matrix
 
 class CostFunction:
     def __init__(self, varsigma=1.57, backend=None, initial_layout=(0,2,3,5), subsystem_qubits=(0,1),
-                 tomography=True, results_dir="results", run_tag=None):
+                 tomography=True, results_dir="results", run_tag=None, shots=8192,
+                 wait_for_result=None):
         # tomography=False skips the per-evaluation 9-setting tomography (and
         # its live PNG): on a noisy simulator it costs several times more than
         # the cost circuit itself, so callers that only need the cost value
         # can turn it off and run tomography.run_tomography when they want it.
+        #
+        # wait_for_result(job) -> Result replaces the plain job.result() call.
+        # Real hardware needs it: QIJob.result() gives up after 60 s, far
+        # less than a typical queue wait (see frontend/experiment.py).
         self.varsigma = varsigma
         self.tomography = tomography
         self.backend = backend
         self.initial_layout = list(initial_layout)
+        self.shots = shots
+        self.wait_for_result = wait_for_result or (lambda job: job.result())
         self.ro_matrices = None
         self.iteration = 0
         self.cost_history = []
@@ -55,6 +62,46 @@ class CostFunction:
         self.log_path = os.path.join(self.results_dir, f"progress_{self.run_tag}.jsonl")
 
     def cost_function(self, params, beta):
+        tomography_for = (0,) if self.tomography else ()
+        return self.evaluate_batch([params], beta, tomography_for=tomography_for)[0][0]
+
+    def evaluate_batch(self, points, beta, tomography_for=()):
+        """Evaluate the cost at every point in `points` in ONE backend job.
+        Points whose index is in `tomography_for` also get a tomography
+        circuit. Returns [(cost, rho or None)] in the order of `points`.
+
+        On real hardware every job waits in the device's queue, so batching
+        the points an optimizer step needs is much faster than one job each.
+        A job may hold a limited number of circuits (5 on QI's Tuna devices):
+        every point costs one circuit, plus one per tomography."""
+        circuits, slots = [], []
+        for i, params in enumerate(points):
+            circuits.append(self._cost_circuit(params))
+            slots.append(("cost", i, None))
+        for i in tomography_for:
+            qc_tomo_t, settings = self._tomography_circuit(points[i])
+            circuits.append(qc_tomo_t)
+            slots.append(("tomo", i, settings))
+
+        job = self.backend.run(circuits, shots=self.shots, memory=True)
+        result = self.wait_for_result(job)
+        failed = [f"circuit {n}: {exp.status}" for n, exp in enumerate(result.results)
+                  if not exp.success]
+        if failed:
+            raise RuntimeError("Backend job failed — " + "; ".join(failed))
+
+        costs, rhos = [None] * len(points), [None] * len(points)
+        # Costs first: the first one may refresh the readout calibration
+        # that the tomography below is corrected with.
+        for n, (kind, i, _) in enumerate(slots):
+            if kind == "cost":
+                costs[i] = self._process_cost(circuits[n], result, n, points[i], beta)
+        for n, (kind, i, settings) in enumerate(slots):
+            if kind == "tomo":
+                rhos[i] = self._process_tomography(circuits[n], result, n, settings, beta)
+        return list(zip(costs, rhos))
+
+    def _cost_circuit(self, params):
         gamma1, gamma2, alpha1, alpha2 = params
 
         qc_cost = QuantumCircuit(4, 16)
@@ -79,18 +126,15 @@ class CostFunction:
         qc_cost.barrier()
         for q in range(4): qc_cost.measure(q, 12+q)
 
-        qc_cost_t = transpile(qc_cost, self.backend, initial_layout=self.initial_layout)
-        circuits = [qc_cost_t]
-        if self.tomography:
-            qc_tomo, settings = build_tomography_circuit(gamma1, gamma2, alpha1, alpha2,
-                                                           subsystem_qubits=self.subsystem_qubits)
-            qc_tomo_t = transpile(qc_tomo, self.backend, initial_layout=self.initial_layout)
-            circuits.append(qc_tomo_t)
+        return transpile(qc_cost, self.backend, initial_layout=self.initial_layout)
 
-        job = self.backend.run(circuits, shots=8192, memory=True)
-        result = job.result()
+    def _tomography_circuit(self, params):
+        qc_tomo, settings = build_tomography_circuit(*params, subsystem_qubits=self.subsystem_qubits)
+        return transpile(qc_tomo, self.backend, initial_layout=self.initial_layout), settings
 
-        raw_cost = get_raw_data(qc_cost_t, result, circuit_nr=0)
+    def _process_cost(self, qc_cost_t, result, circuit_nr, params, beta):
+        gamma1, gamma2, alpha1, alpha2 = params
+        raw_cost = get_raw_data(qc_cost_t, result, circuit_nr=circuit_nr)
         counts_cost = get_multi_counts(raw_cost, 4)
         probs_cost = get_multi_probs(counts_cost)
         x_probs, z_probs, calib0, calib1 = probs_cost[0], probs_cost[1], counts_cost[2], counts_cost[3]
@@ -134,26 +178,27 @@ class CostFunction:
             flush=True,
         )
 
-        if self.tomography:
-            raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=1)
-            counts_tomo = get_multi_counts(raw_tomo, 4)
-            probs_tomo = get_multi_probs(counts_tomo)
-            tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
-                                 for p in probs_tomo[:9]]
-            rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
-            self.tomography_history.append(rho)
-
-            os.makedirs("plots", exist_ok=True)
-            plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
-                         save_path=f"plots/tomography_live_beta{beta}.png")
-
         self.cost_history.append(cost_B)
         return cost_B
 
+    def _process_tomography(self, qc_tomo_t, result, circuit_nr, settings, beta):
+        raw_tomo = get_raw_data(qc_tomo_t, result, circuit_nr=circuit_nr)
+        counts_tomo = get_multi_counts(raw_tomo, 4)
+        probs_tomo = get_multi_probs(counts_tomo)
+        tomography_probs = [apply_readout_assignment_correction(p, self.ro_matrices, [0,1,2,3])
+                             for p in probs_tomo[:9]]
+        rho = reconstruct_density_matrix(tomography_probs, settings, subsystem_qubits=self.subsystem_qubits)
+        self.tomography_history.append(rho)
+
+        os.makedirs("plots", exist_ok=True)
+        plot_density_matrix(rho, title=f"beta={beta}, iteration={self.iteration}",
+                     save_path=f"plots/tomography_live_beta{beta}.png")
+        return rho
+
     # def minimize_cost(self, x0, beta, method='COBYLA', maxiter=None, callback=None):
     #     """Run the classical optimizer. `method` is any scipy.optimize.minimize
-    #     method that supports a plain `callback(xk)` (COBYLA, Nelder-Mead and
-    #     Powell are verified to; see frontend/setup.py's OPTIMIZER_METHODS).
+    #     method that supports a plain `callback(xk)` (COBYLA, are verified to; 
+    #     see frontend/setup.py's OPTIMIZER_METHODS).
     #     `callback`, if given, is invoked with the current parameter vector
     #     after every iteration — used by the GUI to stream progress live.
     #     """
