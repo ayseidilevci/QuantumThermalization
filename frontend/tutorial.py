@@ -12,16 +12,26 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, QPoint, QRect, Signal, QObject
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QFrame,
+)
 
 from frontend.colors import Colors
 
 
 @dataclass
 class TutorialStep:
+    """One stop on the tour. Steps whose target isn't shown (e.g. the
+    real-hardware banner while the emulator is selected) are skipped."""
     target: QWidget
     title: str
     text: str
+
+
+# Longest the body text may grow before it scrolls, and the card's margin
+# from the window edge.
+_MAX_BODY_HEIGHT = 260
+_EDGE = 12
 
 
 class TutorialHighlight(QWidget):
@@ -89,10 +99,29 @@ class TutorialCard(QWidget):
         self.title_lbl.setStyleSheet(f"color: {Colors.TEXT};")
         outer.addWidget(self.title_lbl)
 
+        # The body scrolls when it's longer than the room around the target
+        # (see fit_body), so a long explanation never runs off the card.
         self.body_lbl = QLabel("")
         self.body_lbl.setWordWrap(True)
+        self.body_lbl.setTextFormat(Qt.RichText)
+        self.body_lbl.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.body_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM};")
-        outer.addWidget(self.body_lbl)
+        self.body_scroll = QScrollArea()
+        self.body_scroll.setWidget(self.body_lbl)
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setFrameShape(QFrame.NoFrame)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.body_scroll.setStyleSheet(f"""
+            QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{ background: transparent; width: 8px; margin: 0; }}
+            QScrollBar::handle:vertical {{
+                background: {Colors.BORDER}; border-radius: 4px; min-height: 24px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {Colors.TEXT_MUTED}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+        """)
+        outer.addWidget(self.body_scroll)
 
         btn_row = QHBoxLayout()
         self.skip_btn = QPushButton("Skip")
@@ -133,8 +162,18 @@ class TutorialCard(QWidget):
         self.step_lbl.setText(f"STEP {step_no} OF {total}")
         self.title_lbl.setText(title)
         self.body_lbl.setText(text)
+        self.body_scroll.verticalScrollBar().setValue(0)
         self.back_btn.setEnabled(can_back)
         self.next_btn.setText("Finish" if is_last else "Next")
+
+    def fit_body(self, max_height: int):
+        """Size the body to its text, up to `max_height`; beyond that it
+        scrolls."""
+        margins = self.layout().contentsMargins()
+        # Leave room for the scrollbar so text never hides under it.
+        width = self.width() - margins.left() - margins.right() - 10
+        text_height = self.body_lbl.heightForWidth(width)
+        self.body_scroll.setFixedHeight(max(40, min(text_height + 4, max_height)))
 
     def position_near(self, target: QWidget):
         """Prefer floating to the right of `target`; fall back to below it
@@ -144,6 +183,13 @@ class TutorialCard(QWidget):
         parent = self.parentWidget()
         top_left = target.mapTo(parent, QPoint(0, 0))
         target_rect = QRect(top_left, target.size())
+
+        # Room for the body: the window height minus the card's fixed parts
+        # (step counter, title, buttons), capped at _MAX_BODY_HEIGHT.
+        self.body_scroll.setFixedHeight(0)
+        self.adjustSize()
+        chrome = self.sizeHint().height()
+        self.fit_body(max(40, min(_MAX_BODY_HEIGHT, parent.height() - 2 * _EDGE - chrome)))
         self.adjustSize()          # this is a floating, non-layout-managed
         size = self.size()         # child — nothing else sizes it to its content
 
@@ -153,8 +199,8 @@ class TutorialCard(QWidget):
             x = target_rect.left()
             y = target_rect.bottom() + 12
 
-        x = max(12, min(x, max(12, parent.width() - size.width() - 12)))
-        y = max(12, min(y, max(12, parent.height() - size.height() - 12)))
+        x = max(_EDGE, min(x, max(_EDGE, parent.width() - size.width() - _EDGE)))
+        y = max(_EDGE, min(y, max(_EDGE, parent.height() - size.height() - _EDGE)))
         self.move(x, y)
 
 
@@ -168,6 +214,7 @@ class TutorialCoach(QObject):
         super().__init__(host)
         self.host = host
         self.steps = steps
+        self.active = []
         self.index = 0
 
         self.card = TutorialCard(host)
@@ -179,7 +226,8 @@ class TutorialCoach(QObject):
         self.card.skip_clicked.connect(self.stop)
 
     def start(self):
-        if not self.steps:
+        self.active = [step for step in self.steps if step.target.isVisibleTo(self.host)]
+        if not self.active:
             return
         self.index = 0
         self._show_step()
@@ -196,12 +244,12 @@ class TutorialCoach(QObject):
         """Call from the host window's resizeEvent while the tour is up so
         the card and highlight keep tracking their target."""
         if self.is_active():
-            step = self.steps[self.index]
+            step = self.active[self.index]
             self.highlight.point_at(step.target)
             self.card.position_near(step.target)
 
     def _next(self):
-        if self.index + 1 < len(self.steps):
+        if self.index + 1 < len(self.active):
             self.index += 1
             self._show_step()
         else:
@@ -213,10 +261,10 @@ class TutorialCoach(QObject):
             self._show_step()
 
     def _show_step(self):
-        step = self.steps[self.index]
+        step = self.active[self.index]
         self.card.set_content(
-            step.title, step.text, self.index + 1, len(self.steps),
-            can_back=self.index > 0, is_last=self.index + 1 == len(self.steps),
+            step.title, step.text, self.index + 1, len(self.active),
+            can_back=self.index > 0, is_last=self.index + 1 == len(self.active),
         )
         self.highlight.point_at(step.target)
         self.card.position_near(step.target)

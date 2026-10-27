@@ -23,6 +23,7 @@ SIDEBAR_WIDTH = 300
 # hardware runs are restricted to HARDWARE_OPTIMIZER.
 OPTIMIZER_METHODS = ("COBYLA", "SPSA")
 _ANGLES_TITLE = "Optimizer starting guess (γ, α)"
+MIN_SUGGESTED_ITERATIONS = 100
 
 
 def _field_style():
@@ -66,6 +67,7 @@ class SetupWindow(QWidget):
         # -------------------------------------------------
 
         sidebar = QWidget()
+        self.sidebar = sidebar
         sidebar.setFixedWidth(SIDEBAR_WIDTH)
         sidebar.setStyleSheet(f"background-color: {Colors.BG_2};")
         side = QVBoxLayout(sidebar)
@@ -129,7 +131,12 @@ class SetupWindow(QWidget):
 
         self.iterations = QSpinBox()
         self.iterations.setRange(5, 2000)
-        self.iterations.setValue(100)
+        self.iterations.setValue(SessionConfig.iterations)
+
+        self.iterations_note = QLabel()
+        self.iterations_note.setWordWrap(True)
+        self.iterations.valueChanged.connect(self._update_iterations_note)
+        self._update_iterations_note()
 
         form.addRow("Backend:", self._backend_name_lbl)
         form.addRow("Inverse temperature β:", self.beta_row)
@@ -137,6 +144,7 @@ class SetupWindow(QWidget):
         form.addRow(self.kb_note)
         form.addRow("Optimizer:", self.optimizer)
         form.addRow("Max iterations:", self.iterations)
+        form.addRow(self.iterations_note)
         side.addLayout(form)
 
         self.angles_lbl = QLabel(_ANGLES_TITLE)
@@ -224,34 +232,63 @@ class SetupWindow(QWidget):
 
         self.tutorial = TutorialCoach(self, steps=[
             TutorialStep(
+                self.sidebar, "Welcome",
+                "This tour walks through setting up a run. The app prepares a "
+                "<b>thermofield-double state</b> whose half A is the Gibbs state at "
+                "your chosen temperature, tuning the circuit's angles γ and α with a "
+                "classical optimizer.<br><br>"
+                "On the <b>Starmon-7 emulator</b> it runs a <b>chain experiment</b> "
+                "(β ≈ 0 → 0.5 → 1 → your β, each step starting from the last). On a "
+                "<b>real quantum computer</b> it runs a <b>cold start</b>: one "
+                "optimization straight at your β from random angles, measured on the "
+                "device itself."),
+            TutorialStep(
+                self.hardware_banner, "Real quantum computer",
+                "This banner appears whenever a real device is selected. Every cost "
+                "evaluation then runs on that device: one job per optimizer iteration, "
+                "each waiting in the device's queue, so runs can take much longer than "
+                "on the emulator."),
+            TutorialStep(
                 self._backend_name_lbl, "Backend",
-                "The device you picked on the previous screen. Use "
-                "the “Change backend” button below to go back and pick a "
-                "different one."),
+                "The device you picked on the previous screen: the Starmon-7 emulator "
+                "or a real Tuna device. Use “Change backend” below to pick another."),
             TutorialStep(
                 self.beta_row, "Inverse temperature β",
-                "The target inverse temperature of the Gibbs state you're preparing, "
-                "in units of 1/g. The matching temperature T = 1/(k_B β) is shown "
-                "next to it; β = 0 is infinite temperature."),
+                "The temperature of the Gibbs state you're preparing, as β = 1/(k<sub>B</sub>T) "
+                "in units of 1/g (g is the Hamiltonian's coupling). Choose 0, 0.5, 1, 2, "
+                "3, 4 or 5; the matching temperature is shown underneath. β = 0 is "
+                "infinite temperature (a maximally mixed state), β = 5 is close to the "
+                "ground state."),
             TutorialStep(
                 self.kb_unit, "Boltzmann constant",
-                "Which units T is shown in. Natural units (k_B = 1) give T in "
-                "units of g/k_B; the others give kelvin, taking the coupling g "
-                "as 1 of that energy unit. Display only — it doesn't change the run."),
+                "The units the temperature is shown in. <b>Natural</b> (k<sub>B</sub> = 1) "
+                "gives T in units of g/k<sub>B</sub>. <b>eV/K</b>, <b>GHz/K</b> and "
+                "<b>J/K</b> give kelvin, taking g as 1 of that energy unit; GHz/K is "
+                "the natural scale for superconducting qubits. Display only, it doesn't "
+                "change the run."),
             TutorialStep(
                 self.optimizer, "Optimizer",
-                "The classical method that adjusts γ/α so the prepared state's cost "
-                "function converges for this β. Real hardware always uses SPSA, "
-                "which copes best with noisy measurements."),
+                "The classical method that adjusts γ and α to minimise the cost.<br>"
+                "<b>COBYLA</b> builds a local model of the cost; fast and accurate "
+                "on the noiseless emulator.<br>"
+                "<b>SPSA</b> estimates the gradient from two measurements per step and "
+                "copes far better with noise. Real hardware always uses SPSA; picking "
+                "COBYLA there switches back with a note."),
             TutorialStep(
                 self.iterations, "Max iterations",
-                "The most optimizer steps allowed per β step. It may stop earlier "
-                "if it converges."),
+                "The most optimizer steps per β step (default 200). It's an upper "
+                "limit: COBYLA stops earlier once it converges, which is fine. SPSA "
+                "has no convergence test, so it always uses the full budget. At "
+                "least 100 is suggested; fewer may stop before converging.<br><br>"
+                "On real hardware each iteration is one job, plus 4 extra jobs "
+                "(2 for SPSA's calibration, 1 for the final state, 1 for the final "
+                "counts), each waiting in the device's queue."),
             TutorialStep(
                 self.angles_group, "Starting guess (γ, α)",
-                "The ansatz's variational angles. These are only the optimizer's "
-                "starting guess — it adjusts them itself during the run. On real "
-                "hardware the run starts from random angles instead (cold start)."),
+                "Where the optimizer starts on the emulator; it adjusts the angles "
+                "itself during the run. Avoid all zeros, a saddle point of the cost.<br><br>"
+                "On real hardware these are disabled: the cold start draws random "
+                "angles (each between 0.1 and π in size), shown on the Run screen."),
             TutorialStep(
                 self.device_panel, "Device panel",
                 "Pick subsystem A of the thermofield-double ansatz: drag a line "
@@ -261,7 +298,14 @@ class SetupWindow(QWidget):
                 "it's impossible on this device."),
             TutorialStep(
                 self.start_experiment_btn, "Start Experiment",
-                "Once your qubit assignment is valid, click here to run."),
+                "Once your qubit assignment is valid, click here to run. The Run "
+                "screen shows the fidelity to the target Gibbs state and the cost "
+                "live, plus the measured density matrix.<br><br>"
+                "For a real device it also shows the device's <b>status</b> (idle, "
+                "busy, calibrating, benchmarking, offline) and a <b>Hardware jobs</b> "
+                "tab following every job from Queued to Results received. "
+                "<b>Stop</b> tries to delete the waiting job from the queue and tells "
+                "you whether Quantum Inspire accepted."),
             TutorialStep(
                 self.change_backend_btn, "Change backend",
                 "Not the right device? Go back and pick a "
@@ -279,6 +323,15 @@ class SetupWindow(QWidget):
         self.kb_note.setText(
             f"{k_b_text}.  T = 1/(k_B β), in units of the coupling g." if energy_unit is None
             else f"{k_b_text}.  T = g/(k_B β), taking g = 1 {energy_unit}.")
+
+    def _update_iterations_note(self):
+        low = self.iterations.value() < MIN_SUGGESTED_ITERATIONS
+        self.iterations_note.setText(
+            f"An upper limit: the run may stop earlier once it converges. "
+            f"At least {MIN_SUGGESTED_ITERATIONS} is suggested"
+            + (" — this may stop before converging." if low else "."))
+        self.iterations_note.setStyleSheet(
+            f"color: {Colors.WARN if low else Colors.TEXT_MUTED}; font-size: 10pt;")
 
     def _angle_spinbox(self) -> QDoubleSpinBox:
         box = QDoubleSpinBox()

@@ -783,7 +783,7 @@ class ExperimentWindow(QWidget):
                              self._save_density), 1, 1)
         grid.addWidget(_card("ideal_counts", "Ideal measurement histogram (exact statevector)",
                              self.ideal_counts_canvas, self._save_ideal_counts), 2, 0)
-        grid.addWidget(_card("real_counts", "Measured counts (real hardware)",
+        grid.addWidget(_card("real_counts", "Emulated counts (Starmon-7 noise model)",
                              self.real_counts_canvas, self._save_real_counts), 2, 1)
         for i in (0, 1, 2):
             grid.setRowStretch(i, 1)
@@ -972,7 +972,7 @@ class ExperimentWindow(QWidget):
             ideal_counts_card.show()
             self._grid.addWidget(real_counts_card, 2, 1)
         self._set_card_title("real_counts", f"Measured counts ({self.config.backend_name})"
-                             if hardware else "Measured counts (Starmon-7 emulator)")
+                             if hardware else "Emulated counts (Starmon-7 noise model)")
         self._set_card_title("measured", f"Measured density matrix (tomography on "
                              f"{self.config.backend_name})" if hardware
                              else "Measured density matrix (tomography)")
@@ -1356,10 +1356,16 @@ class ExperimentWindow(QWidget):
         _draw(self.ideal_counts_canvas, ideal_values,
               r"$|\langle b|\psi_{\mathrm{ideal}}\rangle|^2$",
               "No angles to compute yet.")
+        # Starmon-7 is a local noisy emulation, not hardware: say so.
+        if self._hardware:
+            source, empty = (f"Measured on {self.config.backend_name}",
+                             f"No counts from {self.config.backend_name} yet.\n"
+                             f"They appear once the final-counts job returns.")
+        else:
+            source, empty = ("Emulated (Starmon-7 noise model)",
+                             "No emulated counts yet.\nThey appear once the run finishes.")
         _draw(self.real_counts_canvas, real_values,
-              f"{real_total} shots total" if real_total else "Measured (real hardware)",
-              "No real hardware data yet.\nAppears once a run finishes with "
-              "“Submitted to backend.”")
+              f"{source}: {real_total} shots" if real_total else source, empty)
 
     def _density_zmax(self) -> float:
         """Shared z-axis top for the ideal and observed plots: the larger
@@ -1516,7 +1522,7 @@ class ExperimentWindow(QWidget):
         if not self._last_real_counts:
             QMessageBox.information(
                 self, "Nothing to save",
-                "No real hardware counts yet -- run a submission that completes first.")
+                "No measured counts yet — they appear once a run finishes.")
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save measured counts", "measured_counts.csv",
