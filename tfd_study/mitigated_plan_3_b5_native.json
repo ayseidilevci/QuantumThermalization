@@ -1,0 +1,4 @@
+{"note": "3+3 native (no twirl) at beta = 5 on 8-12-15 / 11-14-16, to measure the twirling gain at beta = 5 against the twirl run results/mitig-hw_n3_20261027_200737. Decides whether 4+4 runs with twirl or native with 3 repeats.",
+ "run": {"backend": "Tuna-17", "n": 3, "p": 1, "varsigma": 1.57,
+  "stages": [{"layouts": [[8, 12, 15, 11, 14, 16]], "betas": [5.0], "modes": ["native"], "repeats": 1}],
+  "twirls": 4, "shots_tomo": 4096, "shots_cal": 8192, "max_inflight": 5, "seed": 13}}

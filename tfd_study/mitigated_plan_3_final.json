@@ -1,0 +1,6 @@
+{"note": "3+3 final hardware run on the best scanned placement (2-5-9 / 4-8-12: F_A 0.884, F_B 0.907 in the scan). Stage 0: step-by-step test at beta = 1 (platform, native, twirl). Stage 1: beta = 0.5, 1, 2, 5 with native and twirl, 2 repeats. Run: python -m tfd_study.run_mitigated --config tfd_study/mitigated_plan_3_final.json",
+ "run": {"backend": "Tuna-17", "n": 3, "p": 1, "varsigma": 1.57,
+  "stages": [
+   {"layouts": [[2, 5, 9, 4, 8, 12]], "betas": [1.0], "modes": ["platform", "native", "twirl"], "repeats": 1},
+   {"layouts": [[2, 5, 9, 4, 8, 12]], "betas": [0.5, 1.0, 2.0, 5.0], "modes": ["native", "twirl"], "repeats": 2}],
+  "twirls": 4, "shots_tomo": 4096, "shots_cal": 8192, "max_inflight": 5, "seed": 1}}

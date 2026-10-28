@@ -1,0 +1,5 @@
+{"note": "3+3 on the ladder containing the user's 2+2 qubits 12, 14, 15, 16 (8-12-15 / 11-14-16): step-by-step test at beta = 1 (platform, native, twirl), for direct comparison with the final run on 2-5-9 / 4-8-12. Run: python -m tfd_study.run_mitigated --config tfd_study/mitigated_plan_3_userqubits.json",
+ "run": {"backend": "Tuna-17", "n": 3, "p": 1, "varsigma": 1.57,
+  "stages": [
+   {"layouts": [[8, 12, 15, 11, 14, 16]], "betas": [1.0], "modes": ["platform", "native", "twirl"], "repeats": 1}],
+  "twirls": 4, "shots_tomo": 4096, "shots_cal": 8192, "max_inflight": 5, "seed": 3}}

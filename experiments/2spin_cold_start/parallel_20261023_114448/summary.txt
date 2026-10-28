@@ -1,0 +1,4 @@
+beta     reference(start)  reference(end)   replicas mean +- std (n)        replicas' angles exact
+         F_A     F_B       F_A     F_B      F_A                F_B
+5        0.7061  0.7553    0.6575  0.7644   0.7106 +- 0.0030 (2)  0.6487 +- 0.0020   0.9774
+(qiskit fidelity F = (Tr sqrt)^2; the paper reports sqrt(F))

@@ -1,0 +1,257 @@
+{
+ "Reproduction chain 0 \u2192 0.5 \u2192 1 \u2192 5": {
+  "readout calibration": {
+   "jobs": 108,
+   "circuits": 432,
+   "shots": 3538944,
+   "device_h": 0.6225632475,
+   "device_median_s": 24.2769885,
+   "queue_median_min": 6.0423522499999995
+  },
+  "SPSA gain calibration": {
+   "jobs": 48,
+   "circuits": 192,
+   "shots": 1572864,
+   "device_h": 0.3090359372222222,
+   "device_median_s": 27.477654,
+   "queue_median_min": 6.277371116666667
+  },
+  "SPSA steps": {
+   "jobs": 320,
+   "circuits": 1280,
+   "shots": 10485760,
+   "device_h": 2.112990102222222,
+   "device_median_s": 22.7496345,
+   "queue_median_min": 5.736818808333334
+  },
+  "tomography": {
+   "jobs": 128,
+   "circuits": 576,
+   "shots": 2359296,
+   "device_h": 0.6497047497222223,
+   "device_median_s": 19.2339105,
+   "queue_median_min": 5.485196908333334
+  },
+  "reference tomography": {
+   "jobs": 64,
+   "circuits": 288,
+   "shots": 1179648,
+   "device_h": 0.319158425,
+   "device_median_s": 19.022461999999997,
+   "queue_median_min": 4.361996391666667
+  },
+  "total": {
+   "jobs": 668,
+   "circuits": 2768,
+   "shots": 19136512,
+   "device_h": 4.013452461666667,
+   "device_median_s": 22.554655500000003,
+   "queue_median_min": 5.801549975
+  },
+  "wall_clock_h": 22.051604005833333
+ },
+ "Intermediate chain 1 \u2192 2 \u2192 3 \u2192 4 \u2192 5": {
+  "readout calibration": {
+   "jobs": 68,
+   "circuits": 272,
+   "shots": 2228224,
+   "device_h": 0.3796601547222222,
+   "device_median_s": 24.204029,
+   "queue_median_min": 3.4587307
+  },
+  "SPSA gain calibration": {
+   "jobs": 48,
+   "circuits": 192,
+   "shots": 1572864,
+   "device_h": 0.30098756055555553,
+   "device_median_s": 27.365569999999998,
+   "queue_median_min": 1.8707653916666667
+  },
+  "SPSA steps": {
+   "jobs": 320,
+   "circuits": 1280,
+   "shots": 10485760,
+   "device_h": 2.0198196872222223,
+   "device_median_s": 22.5681765,
+   "queue_median_min": 1.5344377083333332
+  },
+  "tomography": {
+   "jobs": 128,
+   "circuits": 576,
+   "shots": 2359296,
+   "device_h": 0.6191142877777778,
+   "device_median_s": 18.962120499999997,
+   "queue_median_min": 1.4324810166666666
+  },
+  "reference tomography": {
+   "jobs": 64,
+   "circuits": 288,
+   "shots": 1179648,
+   "device_h": 0.3144753097222222,
+   "device_median_s": 19.0388655,
+   "queue_median_min": 4.107910291666666
+  },
+  "total": {
+   "jobs": 628,
+   "circuits": 2608,
+   "shots": 17825792,
+   "device_h": 3.634057,
+   "device_median_s": 22.273364,
+   "queue_median_min": 1.6356479416666667
+  },
+  "wall_clock_h": 18.565800576666664
+ },
+ "Cold start at \u03b2 = 5": {
+  "readout calibration": {
+   "jobs": 20,
+   "circuits": 80,
+   "shots": 655360,
+   "device_h": 0.18011850944444446,
+   "device_median_s": 24.085877500000002,
+   "queue_median_min": 1.6544613083333333
+  },
+  "SPSA gain calibration": {
+   "jobs": 6,
+   "circuits": 24,
+   "shots": 196608,
+   "device_h": 0.03790064111111111,
+   "device_median_s": 27.5780815,
+   "queue_median_min": 5.476054291666666
+  },
+  "SPSA steps": {
+   "jobs": 40,
+   "circuits": 160,
+   "shots": 1310720,
+   "device_h": 0.24741861499999998,
+   "device_median_s": 22.2556585,
+   "queue_median_min": 1.4467675833333333
+  },
+  "tomography": {
+   "jobs": 16,
+   "circuits": 72,
+   "shots": 294912,
+   "device_h": 0.07664600416666667,
+   "device_median_s": 18.8367355,
+   "queue_median_min": 1.514212525
+  },
+  "reference tomography": {
+   "jobs": 16,
+   "circuits": 72,
+   "shots": 294912,
+   "device_h": 0.07689434861111111,
+   "device_median_s": 18.634762000000002,
+   "queue_median_min": 4.062199383333334
+  },
+  "total": {
+   "jobs": 98,
+   "circuits": 408,
+   "shots": 2752512,
+   "device_h": 0.6189781183333334,
+   "device_median_s": 21.98635,
+   "queue_median_min": 1.6162294166666666
+  },
+  "wall_clock_h": 4.149146631944444
+ },
+ "4+4 chain 0.5 \u2192 1 \u2192 2 \u2192 5": {
+  "readout calibration": {
+   "jobs": 9,
+   "circuits": 18,
+   "shots": 73728,
+   "device_h": 0.02263383638888889,
+   "device_median_s": 8.949761,
+   "queue_median_min": 4.416366516666667
+  },
+  "SPSA start (kicks)": {
+   "jobs": 4,
+   "circuits": 16,
+   "shots": 65536,
+   "device_h": 0.021679558611111108,
+   "device_median_s": 23.463386999999997,
+   "queue_median_min": 32.533608449999996
+  },
+  "SPSA gain calibration": {
+   "jobs": 12,
+   "circuits": 48,
+   "shots": 196608,
+   "device_h": 0.06447108277777779,
+   "device_median_s": 23.076417,
+   "queue_median_min": 1.0284199416666666
+  },
+  "SPSA steps": {
+   "jobs": 160,
+   "circuits": 640,
+   "shots": 2621440,
+   "device_h": 0.874997378611111,
+   "device_median_s": 19.5209885,
+   "queue_median_min": 0.13277795
+  },
+  "tomography": {
+   "jobs": 68,
+   "circuits": 324,
+   "shots": 1327104,
+   "device_h": 0.42492366916666663,
+   "device_median_s": 23.109710999999997,
+   "queue_median_min": 0.9282783916666666
+  },
+  "reference tomography": {
+   "jobs": 136,
+   "circuits": 648,
+   "shots": 2654208,
+   "device_h": 0.8541015241666667,
+   "device_median_s": 23.335455,
+   "queue_median_min": 1.3942969166666666
+  },
+  "total": {
+   "jobs": 389,
+   "circuits": 1694,
+   "shots": 6938624,
+   "device_h": 2.262807049722222,
+   "device_median_s": 22.103785,
+   "queue_median_min": 0.7856453499999999
+  },
+  "wall_clock_h": 7.444439931944444
+ },
+ "Cold starts at \u03b2 = 10, 20, 50, 100": {
+  "readout calibration": {
+   "jobs": 64,
+   "circuits": 256,
+   "shots": 2097152,
+   "device_h": 0.36915259166666664,
+   "device_median_s": 25.078704000000002,
+   "queue_median_min": 1.79467165
+  },
+  "SPSA gain calibration": {
+   "jobs": 12,
+   "circuits": 48,
+   "shots": 393216,
+   "device_h": 0.07496646638888889,
+   "device_median_s": 27.3617705,
+   "queue_median_min": 1.0183037
+  },
+  "SPSA steps": {
+   "jobs": 80,
+   "circuits": 320,
+   "shots": 2621440,
+   "device_h": 0.5072832602777777,
+   "device_median_s": 22.584718000000002,
+   "queue_median_min": 1.4425210250000002
+  },
+  "tomography": {
+   "jobs": 32,
+   "circuits": 144,
+   "shots": 589824,
+   "device_h": 0.1548332616666667,
+   "device_median_s": 19.0074005,
+   "queue_median_min": 4.873426883333334
+  },
+  "total": {
+   "jobs": 188,
+   "circuits": 768,
+   "shots": 5701632,
+   "device_h": 1.10623558,
+   "device_median_s": 22.723857000000002,
+   "queue_median_min": 1.55911405
+  },
+  "wall_clock_h": 3.5629856930555555
+ }
+}

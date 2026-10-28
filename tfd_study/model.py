@@ -27,7 +27,7 @@ from itertools import product
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import ParameterVector
-from qiskit.quantum_info import DensityMatrix, SparsePauliOp, state_fidelity
+from qiskit.quantum_info import DensityMatrix, SparsePauliOp, Statevector, partial_trace, state_fidelity
 
 G_FIELD = 1.0
 
@@ -59,6 +59,12 @@ def gibbs_state(n, beta, g=G_FIELD):
 def fidelity(rho, beta, n, g=G_FIELD):
     """qiskit (squared) fidelity of rho_A to the exact Gibbs state."""
     return float(state_fidelity(DensityMatrix(rho), DensityMatrix(gibbs_state(n, beta, g)), validate=False))
+
+
+def free_energy(rho, beta, n, g=G_FIELD):
+    """beta * F[rho] = beta Tr(rho H_A) - S(rho); minimised exactly by the Gibbs state."""
+    p = np.clip(np.linalg.eigvalsh(rho), 1e-15, 1)
+    return float(beta * np.real(np.trace(rho @ hamiltonian_A(n, g))) + np.sum(p * np.log(p)))
 
 
 # ----------------------------------------------------------------------------- circuits
@@ -219,3 +225,34 @@ def project_physical(rho):
         acc += w[i]
         w[i] = 0.0
     return (v * w) @ v.conj().T
+
+
+# ----------------------------------------------------------------------------- exact (noiseless) reference
+
+def exact_state(n, p, theta):
+    return Statevector(bound_ansatz(n, p, theta))
+
+
+def exact_rho_A(n, p, theta):
+    return partial_trace(exact_state(n, p, theta), list(range(n, 2 * n))).data
+
+
+def exact_rho_B(n, p, theta):
+    return partial_trace(exact_state(n, p, theta), list(range(n))).data
+
+
+def exact_terms(n, p, theta):
+    psi = exact_state(n, p, theta)
+    pz = psi.probabilities()
+    hx = QuantumCircuit(2 * n)
+    hx.ry(-np.pi / 2, range(2 * n))
+    px = psi.evolve(hx).probabilities()
+    return loss_terms(pz, px, n)
+
+
+def exact_loss(theta, n, p, beta, s):
+    return loss(exact_terms(n, p, theta), beta, s)
+
+
+def exact_fidelity(n, p, theta, beta):
+    return fidelity(exact_rho_A(n, p, theta), beta, n)

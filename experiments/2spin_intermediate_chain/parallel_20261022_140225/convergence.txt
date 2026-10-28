@@ -1,0 +1,29 @@
+Convergence of SPSA in parallel_20261022_140225  (4 replicas x 20 steps per beta, 8192 shots per cost circuit; device costs from tomography, 4 x 4096 shots per basis)
+
+beta = 2.0   best angles: exact cost -5.523, device cost -3.627 ± 0.021, -3.698 ± 0.021   (start, end)
+  replica | last-10 slope per step | last-5 mean loss | device cost at final angles | exact cost | F(angles) start -> final
+        0 | -0.0165 ± 0.0153        | -3.170           | -3.244 ± 0.022              | -5.413     | 0.933 -> 0.982
+        1 | -0.0007 ± 0.0273        | -2.498           | -2.773 ± 0.022              | -4.538     | 0.957 -> 0.932
+        2 | -0.0149 ± 0.0363        | -3.057           | -3.197 ± 0.022              | -5.466     | 0.965 -> 0.982
+        3 | -0.0254 ± 0.0124        | -3.224           | -3.449 ± 0.022              | -5.427     | 0.918 -> 0.972
+
+beta = 3.0   best angles: exact cost -5.169, device cost -3.424 ± 0.021, -3.488 ± 0.021   (start, end)
+  replica | last-10 slope per step | last-5 mean loss | device cost at final angles | exact cost | F(angles) start -> final
+        0 | -0.0308 ± 0.0099        | -3.129           | -3.051 ± 0.022              | -5.088     | 0.959 -> 0.972
+        1 | -0.0080 ± 0.0247        | -2.505           | -2.849 ± 0.022              | -4.410     | 0.906 -> 0.905
+        2 | -0.0132 ± 0.0144        | -2.921           | -3.368 ± 0.021              | -4.786     | 0.990 -> 0.947
+        3 | -0.0286 ± 0.0377        | -2.756           | -3.262 ± 0.021              | -4.862     | 0.989 -> 0.970
+
+beta = 4.0   best angles: exact cost -5.037, device cost -3.308 ± 0.021, -3.326 ± 0.021   (start, end)
+  replica | last-10 slope per step | last-5 mean loss | device cost at final angles | exact cost | F(angles) start -> final
+        0 | +0.0419 ± 0.0226        | -2.107           | -2.513 ± 0.022              | -3.934     | 0.906 -> 0.711
+        1 | -0.0130 ± 0.0108        | -3.049           | -3.186 ± 0.021              | -4.922     | 0.869 -> 0.989
+        2 | -0.0144 ± 0.0256        | -3.027           | -3.291 ± 0.021              | -4.807     | 0.956 -> 0.797
+        3 | -0.0419 ± 0.0128        | -2.960           | -3.111 ± 0.021              | -4.616     | 0.843 -> 0.890
+
+beta = 5.0   best angles: exact cost -4.973, device cost -3.334 ± 0.021, -3.409 ± 0.021   (start, end)
+  replica | last-10 slope per step | last-5 mean loss | device cost at final angles | exact cost | F(angles) start -> final
+        0 | +0.0131 ± 0.0090        | -2.631           | -3.027 ± 0.021              | -4.678     | 0.806 -> 0.941
+        1 | -0.0746 ± 0.0283        | -2.900           | -3.290 ± 0.021              | -4.790     | 0.988 -> 0.955
+        2 | -0.0084 ± 0.0185        | -2.872           | -3.317 ± 0.021              | -4.759     | 0.915 -> 0.970
+        3 | +0.0394 ± 0.0240        | -2.299           | -3.086 ± 0.020              | -4.333     | 0.945 -> 0.874

@@ -1,0 +1,91 @@
+{
+ "note": "Qubit scan for 3+3: the noiseless-optimal state at beta = 1 on every ladder placement on Tuna-17 (8), native compilation, own readout calibration per placement. Run: python -m tfd_study.run_mitigated --config tfd_study/mitigated_plan_3_scan.json",
+ "run": {
+  "backend": "Tuna-17",
+  "n": 3,
+  "p": 1,
+  "varsigma": 1.57,
+  "stages": [
+   {
+    "layouts": [
+     [
+      0,
+      2,
+      5,
+      1,
+      4,
+      8
+     ],
+     [
+      2,
+      4,
+      7,
+      5,
+      8,
+      11
+     ],
+     [
+      2,
+      5,
+      9,
+      4,
+      8,
+      12
+     ],
+     [
+      3,
+      5,
+      8,
+      6,
+      9,
+      12
+     ],
+     [
+      4,
+      7,
+      10,
+      8,
+      11,
+      13
+     ],
+     [
+      4,
+      8,
+      12,
+      7,
+      11,
+      14
+     ],
+     [
+      5,
+      8,
+      11,
+      9,
+      12,
+      14
+     ],
+     [
+      8,
+      12,
+      15,
+      11,
+      14,
+      16
+     ]
+    ],
+    "betas": [
+     1.0
+    ],
+    "modes": [
+     "native"
+    ],
+    "repeats": 1
+   }
+  ],
+  "twirls": 4,
+  "shots_tomo": 4096,
+  "shots_cal": 8192,
+  "max_inflight": 5,
+  "seed": 0
+ }
+}

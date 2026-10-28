@@ -1,0 +1,6 @@
+Convergence of SPSA in parallel_20261022_215422  (2 replicas x 20 steps per beta, 8192 shots per cost circuit; device costs from tomography, 4 x 4096 shots per basis)
+
+beta = 5.0   best angles: exact cost -4.973, device cost -3.357 ± 0.021, -3.211 ± 0.021   (start, end)
+  replica | last-10 slope per step | last-5 mean loss | device cost at final angles | exact cost | F(angles) start -> final
+        0 | -0.2232 ± 0.0406        | -2.663           | -3.166 ± 0.021              | -4.869     | 0.259 -> 0.958
+        1 | +0.0070 ± 0.0107        | -2.651           | -2.747 ± 0.022              | -4.423     | 0.259 -> 0.951

@@ -1,0 +1,35 @@
+{
+ "note": "3+3 SPSA on Tuna-17 on the user's qubits 8-12-15 / 11-14-16: the same plan as the original 3+3 run (hardware_plan.json: chain from theta = 0 with kicks, 2 independent runs, 40 SPSA steps per beta, beta = 0.5, 1, 2, 5), only the qubits changed. Run: python -m tfd_study.run_hardware --config tfd_study/hardware_plan_3_userqubits.json",
+ "run": {
+  "backend": "Tuna-17",
+  "n": 3,
+  "p": 1,
+  "varsigma": 1.57,
+  "betas": [
+   0.5,
+   1.0,
+   2.0,
+   5.0
+  ],
+  "layout": [
+   8,
+   12,
+   15,
+   11,
+   14,
+   16
+  ],
+  "replicas": 2,
+  "iters": 40,
+  "calibrate": 3,
+  "first_step": 0.3,
+  "n_kicks": 8,
+  "kick": 0.4,
+  "seed": 0,
+  "shots_cost": 4096,
+  "shots_tomo": 4096,
+  "cal_interval": 30,
+  "max_inflight": 5,
+  "reference_end": true
+ }
+}

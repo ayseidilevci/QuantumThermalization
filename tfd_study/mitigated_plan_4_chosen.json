@@ -1,0 +1,40 @@
+{
+ "note": "4+4 final run, mode 'twirl' and placement chosen by choose_mitigation.py from the beta = 1 step-by-step tests (results/mitig-hw_n3_20261027_141000, results/mitig-hw_n3_20261027_151540). Placement switched by request to 4-8-12-15 / 7-11-14-16 (contains the best 3+3 placement 8-12-15 / 11-14-16). Twirl variants reduced to 2 (from 4) by request to halve the job count; shots per setting unchanged (4096). Twirl gain at beta = 5 on 3+3 was +0.017 < 0.05: switched to native with 3 repeats.",
+ "run": {
+  "backend": "Tuna-17",
+  "p": 1,
+  "varsigma": 1.57,
+  "twirls": 2,
+  "shots_tomo": 4096,
+  "shots_cal": 8192,
+  "max_inflight": 5,
+  "n": 4,
+  "seed": 12,
+  "stages": [
+   {
+    "layouts": [
+     [
+      4,
+      8,
+      12,
+      15,
+      7,
+      11,
+      14,
+      16
+     ]
+    ],
+    "betas": [
+     0.5,
+     1.0,
+     2.0,
+     5.0
+    ],
+    "modes": [
+     "native"
+    ],
+    "repeats": 3
+   }
+  ]
+ }
+}

@@ -1,0 +1,4 @@
+label                                             F_A paper: none  perqubit  full   F_B full  noiseless  F_A to circuit (full)
+s0/8-12-15-11-14-16/b=1/r0/platform               0.948    0.955   0.953   0.957     0.986      0.972
+s0/8-12-15-11-14-16/b=1/r0/native                 0.941    0.946   0.945   0.958     0.986      0.962
+s0/8-12-15-11-14-16/b=1/r0/twirl                  0.953    0.963   0.963   0.963     0.986      0.972

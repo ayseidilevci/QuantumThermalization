@@ -1,0 +1,37 @@
+{
+ "note": "4+4 SPSA on Tuna-17 on 4-8-12-15 / 7-11-14-16 (the ladder with the user's qubits): the same plan as the original 4+4 run (hardware_plan_4.json), only the qubits changed. Run: python -m tfd_study.run_hardware --config tfd_study/hardware_plan_4_userqubits.json",
+ "run": {
+  "backend": "Tuna-17",
+  "n": 4,
+  "p": 1,
+  "varsigma": 1.57,
+  "betas": [
+   0.5,
+   1.0,
+   2.0,
+   5.0
+  ],
+  "layout": [
+   4,
+   8,
+   12,
+   15,
+   7,
+   11,
+   14,
+   16
+  ],
+  "replicas": 1,
+  "iters": 40,
+  "calibrate": 3,
+  "first_step": 0.3,
+  "n_kicks": 8,
+  "kick": 0.4,
+  "seed": 0,
+  "shots_cost": 4096,
+  "shots_tomo": 4096,
+  "cal_interval": 30,
+  "max_inflight": 5,
+  "reference_end": true
+ }
+}
