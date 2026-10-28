@@ -1,10 +1,9 @@
 """The Run screen's always-visible progress strip: what the run is doing now,
-a track with one dot per β stage and a checkered flag at the finish, and the
-elapsed time."""
+a track with one dot per β stage, and the elapsed time."""
 
 import time
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
@@ -27,8 +26,7 @@ def _clock(seconds: float) -> str:
 
 
 class _Track(QWidget):
-    """The bar itself: stages as dots, filled up to `fraction`, the finish
-    as a checkered flag."""
+    """The bar itself: stages as dots, filled up to `fraction`."""
 
     def __init__(self):
         super().__init__()
@@ -43,7 +41,7 @@ class _Track(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        left, right = 14.0, self.width() - 30.0
+        left, right = 14.0, self.width() - 14.0
         y = self.height() / 2 - 6
         n = max(1, len(self.labels))
         xs = [left + (right - left) * i / n for i in range(n)]
@@ -63,19 +61,7 @@ class _Track(QWidget):
             size = pixmap.deviceIndependentSize()
             painter.drawPixmap(QPointF(x - size.width() / 2, y + 10), pixmap)
 
-        self._draw_flag(painter, right + 2, y)
         painter.end()
-
-    def _draw_flag(self, painter, x, y):
-        pole_top, pole_bottom = y - 20, y + 12
-        painter.setPen(QPen(QColor(Colors.GOOD if self.finished else Colors.TEXT_DIM), 2))
-        painter.drawLine(QPointF(x, pole_top), QPointF(x, pole_bottom))
-        size, cols, rows = 4.5, 4, 3
-        painter.setPen(Qt.NoPen)
-        for r in range(rows):
-            for c in range(cols):
-                painter.setBrush(QColor(Colors.TEXT if (r + c) % 2 == 0 else Colors.BG_1))
-                painter.drawRect(QRectF(x + 1 + c * size, pole_top + r * size, size, size))
 
 
 class RunProgressBar(QWidget):

@@ -59,7 +59,7 @@ Each run is saved under `~/Documents/QuantumInspireProjects/`. In **Past Experim
 
 Tuna-5 isn't offered: its star-shaped chip has no 2 × 2 ladder of coupled qubits. The QX emulator allows at most 2048 shots per circuit, so runs there use 2048.
 
-During a cloud run (QX or real hardware) the left sidebar shows the backend's live status (idle, busy, calibrating, benchmarking or offline), and the **Cloud jobs** / **Hardware jobs** tab follows every job from Queued to Results received. **Stop** tries to delete the waiting job from the queue and reports whether Quantum Inspire accepted. A strip along the bottom of the Run screen shows the run's progress: one dot per β stage, a checkered flag at the finish, and the elapsed time.
+During a cloud run (QX or real hardware) the left sidebar shows the backend's live status (idle, busy, calibrating, benchmarking or offline), and the **Cloud jobs** / **Hardware jobs** tab follows every job from Queued to Results received. **Stop** tries to delete the waiting job from the queue and reports whether Quantum Inspire accepted. A strip along the bottom of the Run screen shows the run's progress: one dot per β stage and the elapsed time.
 
 ### System size
 
