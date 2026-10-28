@@ -44,8 +44,9 @@ class LadderTFD:
     """`layout`: physical qubits of A1..An, B1..Bn. `max_circuits`: the
     device's limit per job (5 on Quantum Inspire's Tuna devices)."""
 
-    def __init__(self, n, backend, layout, wait, max_circuits, varsigma=1.57, p=1):
+    def __init__(self, n, backend, layout, wait, max_circuits, varsigma=1.57, p=1, shots=SHOTS):
         self.n, self.p, self.varsigma = n, p, varsigma
+        self.shots = shots
         self.backend, self.layout = backend, list(layout)
         self.wait = wait
         self.max_circuits = max_circuits or 5
@@ -62,13 +63,19 @@ class LadderTFD:
         for k, chunk in enumerate(chunks):
             label = purpose + (f" ({k + 1}/{len(chunks)})" if len(chunks) > 1 else "")
             compiled = transpile(chunk, self.backend, initial_layout=self.layout)
-            result = self.wait(self.backend.run(compiled, shots=SHOTS), label)
+            result = self.wait(self.backend.run(compiled, shots=self.shots), label)
             failed = [f"circuit {i}: {exp.status}" for i, exp in enumerate(result.results)
                       if not exp.success]
             if failed:
                 raise RuntimeError("Backend job failed — " + "; ".join(failed))
-            probs += [model.counts_to_probs(result.get_counts(i), 2 * self.n)
-                      for i in range(len(chunk))]
+            for i in range(len(chunk)):
+                counts = result.get_counts(i)
+                if any(int(key.replace(" ", ""), 2) >= 4 ** self.n for key in counts):
+                    raise RuntimeError(
+                        f"{getattr(self.backend, 'name', 'the backend')} returned results with more "
+                        f"than {2 * self.n} bits (e.g. {max(counts, key=len)!r}): they're indexed "
+                        f"by physical qubit, not by the circuit's bits, for layout {self.layout}.")
+                probs.append(model.counts_to_probs(counts, 2 * self.n))
         return probs
 
     def _corrected(self, circuits, purpose):

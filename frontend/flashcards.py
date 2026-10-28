@@ -87,10 +87,11 @@ FLASHCARDS = (
      "$$\\beta \\approx 0 \\;\\to\\; 0.5 \\;\\to\\; 1 \\;\\to\\; \\beta_{\\mathrm{target}}$$"
      "It starts near the known $\\beta = 0$ solution. This app uses it on the emulator."),
     ("Algorithm", "What is a cold start?",
-     "One optimization straight at $\\beta_{\\mathrm{target}}$, from random angles:"
-     "$$|\\gamma_i|,\\ |\\alpha_i| \\in [0.1,\\, \\pi]$$"
-     "No chain, so far fewer hardware jobs, and our tests gave practically the "
-     "same result. This app uses it on real hardware, with SPSA."),
+     "One optimization straight at $\\beta_{\\mathrm{target}}$, from small random angles "
+     "near the $\\beta = 0$ solution:"
+     "$$\\gamma_i,\\ \\alpha_i \\sim \\mathcal{N}(0,\\, 0.4)$$"
+     "No chain, so far fewer cloud jobs. Fully random angles would often get stuck "
+     "in a poor local minimum for 3+3 and 4+4. This app uses it in the cloud, with SPSA."),
     ("Results", "How is success measured?",
      "Fidelity (Eq. 11) and purity (Eq. 12):"
      "$$F = \\mathrm{Tr}\\sqrt{\\sqrt{\\rho_G}\\,\\rho_{\\mathrm{Exp}}\\sqrt{\\rho_G}}$$"

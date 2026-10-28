@@ -5,12 +5,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from backend import starmon7
+from backend import backends
 from frontend.colors import Colors
 from frontend.device_panel import DevicePanel
+from frontend.help_button import HELP_SIZE, HelpButton
+from frontend.latex import set_tex, tex_label
 from frontend.session import (
     BETA_CHOICES, BETA_ZERO, DEFAULT_KB_UNIT, DEFAULT_START_ANGLE, HARDWARE_OPTIMIZER, KB_UNITS, SPIN_CHOICES,
-    SessionConfig, format_beta, format_temperature, nearest_beta_choice, spins_allowed,
+    SessionConfig, format_beta, format_temperature_tex, nearest_beta_choice, spins_allowed,
 )
 from frontend.tutorial import TutorialCoach, TutorialStep
 
@@ -20,7 +22,7 @@ SIDEBAR_WIDTH = 300
 # scipy.optimize.minimize, SPSA via backend/spsa.py (scipy has none). Real
 # hardware runs are restricted to HARDWARE_OPTIMIZER.
 OPTIMIZER_METHODS = ("COBYLA", "SPSA")
-_ANGLES_TITLE = "Optimizer starting guess (γ, α)"
+_ANGLES_TITLE = r"Optimizer starting guess ($\gamma$, $\alpha$)"
 MIN_SUGGESTED_ITERATIONS = 100
 
 
@@ -40,6 +42,21 @@ def _field_style():
     """
 
 
+def _with_help(widget: QWidget, help_button: HelpButton = None) -> QWidget:
+    """`widget` with its "?" on the right. Rows without help get an empty slot
+    of the same width, so every field in the form ends at the same edge."""
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(6)
+    layout.addWidget(widget, stretch=1)
+    if help_button is None:
+        help_button = QWidget()
+        help_button.setFixedSize(HELP_SIZE, HELP_SIZE)
+    layout.addWidget(help_button, alignment=Qt.AlignTop)
+    return row
+
+
 class SetupWindow(QWidget):
 
     run_requested = Signal(object)   # SessionConfig
@@ -54,7 +71,7 @@ class SetupWindow(QWidget):
 
         self._backend_name = None
         self._qubit_mapping = {}
-        self._real_hardware = False
+        self._remote = False   # QX emulator or real hardware: jobs in the cloud
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -80,13 +97,10 @@ class SetupWindow(QWidget):
         title.setStyleSheet(f"color: {Colors.TEXT};")
         side.addWidget(title)
 
-        # Shown only while a real device is selected (see set_backend).
+        # Shown while a cloud backend (QX emulator or real hardware) is
+        # selected; see _apply_hardware_mode.
         self.hardware_banner = QLabel()
         self.hardware_banner.setWordWrap(True)
-        self.hardware_banner.setStyleSheet(f"""
-            color: {Colors.TEXT}; background: rgba(254, 138, 39, 0.12);
-            border: 1px solid {Colors.WARN}; border-radius: 8px; padding: 8px 10px;
-        """)
         self.hardware_banner.hide()
         side.addWidget(self.hardware_banner)
 
@@ -115,9 +129,7 @@ class SetupWindow(QWidget):
         for key, (label, _, _, _) in KB_UNITS.items():
             self.kb_unit.addItem(label, key)
 
-        self.kb_note = QLabel()
-        self.kb_note.setWordWrap(True)
-        self.kb_note.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10pt;")
+        self.kb_help = HelpButton()
 
         self.beta.currentIndexChanged.connect(self._update_temperature)
         self.kb_unit.currentIndexChanged.connect(self._update_temperature)
@@ -131,33 +143,29 @@ class SetupWindow(QWidget):
         self.iterations.setRange(5, 2000)
         self.iterations.setValue(SessionConfig.iterations)
 
-        self.iterations_note = QLabel()
-        self.iterations_note.setWordWrap(True)
-        self.iterations.valueChanged.connect(self._update_iterations_note)
-        self._update_iterations_note()
+        self.iterations_help = HelpButton()
+        self.iterations.valueChanged.connect(self._update_iterations_help)
+        self._update_iterations_help()
 
         self.spins = QComboBox()
         for n in SPIN_CHOICES:
-            self.spins.addItem(f"{n}+{n} ({2 * n} qubits)", n)
+            self.spins.addItem(f"{n}+{n}", n)
         self.spins.currentIndexChanged.connect(self._on_spins_changed)
-        self.spins_note = QLabel()
-        self.spins_note.setWordWrap(True)
-        self.spins_note.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 10pt;")
+        self.spins_help = HelpButton()
 
         form.addRow("Backend:", self._backend_name_lbl)
-        form.addRow("System size:", self.spins)
-        form.addRow(self.spins_note)
-        form.addRow("Inverse temperature β:", self.beta_row)
-        form.addRow("Boltzmann constant:", self.kb_unit)
-        form.addRow(self.kb_note)
-        form.addRow("Optimizer:", self.optimizer)
-        form.addRow("Max iterations:", self.iterations)
-        form.addRow(self.iterations_note)
+        form.addRow("System size:", _with_help(self.spins, self.spins_help))
+        form.addRow(tex_label(r"Inverse temperature $\beta$:", Colors.TEXT_DIM),
+                    _with_help(self.beta_row))
+        form.addRow("Boltzmann constant:", _with_help(self.kb_unit, self.kb_help))
+        form.addRow("Optimizer:", _with_help(self.optimizer))
+        form.addRow("Max iterations:", _with_help(self.iterations, self.iterations_help))
         side.addLayout(form)
 
-        self.angles_lbl = QLabel(_ANGLES_TITLE)
+        self.angles_lbl = QLabel()
         self.angles_lbl.setWordWrap(True)
         self.angles_lbl.setStyleSheet(f"color: {Colors.TEXT_DIM}; font-weight: 600;")
+        set_tex(self.angles_lbl, _ANGLES_TITLE, Colors.TEXT_DIM)
         side.addWidget(self.angles_lbl)
 
         self.angles_group = QWidget()
@@ -168,10 +176,9 @@ class SetupWindow(QWidget):
         self.gamma2 = self._angle_spinbox()
         self.alpha1 = self._angle_spinbox()
         self.alpha2 = self._angle_spinbox()
-        angle_form.addRow("γ₁:", self.gamma1)
-        angle_form.addRow("γ₂:", self.gamma2)
-        angle_form.addRow("α₁:", self.alpha1)
-        angle_form.addRow("α₂:", self.alpha2)
+        for tex, box in ((r"\gamma_1", self.gamma1), (r"\gamma_2", self.gamma2),
+                         (r"\alpha_1", self.alpha1), (r"\alpha_2", self.alpha2)):
+            angle_form.addRow(tex_label(f"${tex}$:", Colors.TEXT_DIM), box)
         side.addWidget(self.angles_group)
 
         sidebar.setStyleSheet(sidebar.styleSheet() + _field_style())
@@ -237,70 +244,72 @@ class SetupWindow(QWidget):
                 self.sidebar, "Welcome",
                 "This tour walks through setting up a run. The app prepares a "
                 "<b>thermofield-double state</b> whose half A is the Gibbs state at "
-                "your chosen temperature, tuning the circuit's angles γ and α with a "
+                r"your chosen temperature, tuning the circuit's angles $\gamma$ and $\alpha$ with a "
                 "classical optimizer.<br><br>"
-                "On the <b>Starmon-7 emulator</b> it runs a <b>chain experiment</b> "
-                "(β ≈ 0 → 0.5 → 1 → your β, each step starting from the last). On a "
-                "<b>real quantum computer</b> it runs a <b>cold start</b>: one "
-                "optimization straight at your β from random angles, measured on the "
+                "On the local <b>Starmon-7</b> simulator it runs a <b>chain experiment</b> "
+                r"($\beta \approx 0 \to 0.5 \to 1 \to$ your $\beta$, each step starting from the last). In the "
+                "cloud (the <b>QX emulator</b> or a <b>real quantum computer</b>) it runs a "
+                r"<b>cold start</b>: one optimization straight at your $\beta$ from random "
+                "angles, measured on the "
                 "device itself."),
             TutorialStep(
-                self.hardware_banner, "Real quantum computer",
-                "This banner appears whenever a real device is selected. Every cost "
-                "evaluation then runs on that device: one job per optimizer iteration, "
-                "each waiting in the device's queue, so runs can take much longer than "
-                "on the emulator."),
+                self.hardware_banner, "Cloud backend",
+                "This banner appears when the QX emulator (blue) or a real quantum "
+                "computer (orange) is selected. Every cost evaluation then runs there: "
+                "one job per optimizer iteration, each waiting in a queue, so runs can "
+                "take much longer than on Starmon-7."),
             TutorialStep(
                 self._backend_name_lbl, "Backend",
-                "The device you picked on the previous screen: the Starmon-7 emulator "
+                "The backend you picked on the previous screen: the Starmon-7 noisy "
+                "simulator (on this computer), the noiseless QX emulator (in the cloud) "
                 "or a real Tuna device. Use “Change backend” below to pick another."),
             TutorialStep(
                 self.spins, "System size",
                 "How many spins each system has. <b>2 spins</b> (2+2 = 4 qubits) is "
-                "the original experiment and runs on every device. <b>3 spins</b> "
-                "(6 qubits) and <b>4 spins</b> (8 qubits) run on <b>Tuna-17</b> only: "
-                "the ansatz needs a 2 × n ladder of coupled qubits, and Tuna-17 is "
-                "the only device a 4 × 2 ladder fits on.<br><br>"
+                "the original experiment and runs on every backend. <b>3 spins</b> "
+                "(6 qubits) and <b>4 spins</b> (8 qubits) run on <b>Tuna-17</b> and the "
+                "<b>QX emulator</b>: the ansatz needs a 2 × n ladder of coupled qubits, "
+                "and Tuna-17 is the only chip a 4 × 2 ladder fits on.<br><br>"
                 "For 3 and 4 spins the fidelity is measured once, by tomography at "
-                "the end (3<sup>n</sup> = 27 or 81 circuits): too many jobs to repeat "
+                "the end ($3^n$ = 27 or 81 circuits): too many jobs to repeat "
                 "every iteration."),
             TutorialStep(
-                self.beta_row, "Inverse temperature β",
-                "The temperature of the Gibbs state you're preparing, as β = 1/(k<sub>B</sub>T) "
-                "in units of 1/g (g is the Hamiltonian's coupling). Choose 0, 0.5, 1, 2, "
-                "3, 4 or 5; the matching temperature is shown underneath. β = 0 is "
-                "infinite temperature (a maximally mixed state), β = 5 is close to the "
-                "ground state."),
+                self.beta_row, r"Inverse temperature $\beta$",
+                r"The temperature of the Gibbs state you're preparing, as $\beta = 1/(k_B T)$ "
+                r"in units of $1/g$ ($g$ is the Hamiltonian's coupling). Choose 0, 0.5, 1, 2, "
+                r"3, 4 or 5; the matching temperature is shown underneath. $\beta = 0$ is "
+                r"infinite temperature (a maximally mixed state), $\beta = 5$ is close to the "
+                r"ground state."),
             TutorialStep(
                 self.kb_unit, "Boltzmann constant",
-                "The units the temperature is shown in. <b>Natural</b> (k<sub>B</sub> = 1) "
-                "gives T in units of g/k<sub>B</sub>. <b>eV/K</b>, <b>GHz/K</b> and "
-                "<b>J/K</b> give kelvin, taking g as 1 of that energy unit; GHz/K is "
+                r"The units the temperature is shown in. <b>Natural</b> ($k_B = 1$) "
+                r"gives $T$ in units of $g/k_B$. <b>eV/K</b>, <b>GHz/K</b> and "
+                r"<b>J/K</b> give kelvin, taking $g$ as 1 of that energy unit; GHz/K is "
                 "the natural scale for superconducting qubits. Display only, it doesn't "
                 "change the run."),
             TutorialStep(
                 self.optimizer, "Optimizer",
-                "The classical method that adjusts γ and α to minimise the cost.<br>"
+                r"The classical method that adjusts $\gamma$ and $\alpha$ to minimise the cost.<br>"
                 "<b>COBYLA</b> builds a local model of the cost; fast and accurate "
                 "on the noiseless emulator.<br>"
                 "<b>SPSA</b> estimates the gradient from two measurements per step and "
-                "copes far better with noise. Real hardware always uses SPSA; picking "
-                "COBYLA there switches back with a note."),
+                "copes far better with noise. Cloud runs (QX emulator and real hardware) "
+                "always use SPSA; picking COBYLA there switches back with a note."),
             TutorialStep(
                 self.iterations, "Max iterations",
-                "The most optimizer steps per β step (default 200). It's an upper "
+                r"The most optimizer steps per $\beta$ step (default 200). It's an upper "
                 "limit: COBYLA stops earlier once it converges, which is fine. SPSA "
                 "has no convergence test, so it always uses the full budget. At "
                 "least 100 is suggested; fewer may stop before converging.<br><br>"
-                "On real hardware each iteration is one job, plus 4 extra jobs "
+                "In the cloud each iteration is one job, plus 4 extra jobs "
                 "(2 for SPSA's calibration, 1 for the final state, 1 for the final "
                 "counts), each waiting in the device's queue."),
             TutorialStep(
-                self.angles_group, "Starting guess (γ, α)",
-                "Where the optimizer starts on the emulator; it adjusts the angles "
+                self.angles_group, r"Starting guess ($\gamma$, $\alpha$)",
+                "Where the optimizer starts on Starmon-7; it adjusts the angles "
                 "itself during the run. Avoid all zeros, a saddle point of the cost.<br><br>"
-                "On real hardware these are disabled: the cold start draws random "
-                "angles (each between 0.1 and π in size), shown on the Run screen."),
+                "In the cloud these are disabled: the cold start draws small random "
+                r"angles near $\theta = 0$ (the $\beta = 0$ solution), shown on the Run screen."),
             TutorialStep(
                 self.device_panel, "Device panel",
                 "Pick subsystem A of the thermofield-double ansatz: a chain of "
@@ -313,8 +322,10 @@ class SetupWindow(QWidget):
                 self.start_experiment_btn, "Start Experiment",
                 "Once your qubit assignment is valid, click here to run. The Run "
                 "screen shows the fidelity to the target Gibbs state and the cost "
-                "live, plus the measured density matrix.<br><br>"
-                "For a real device it also shows the device's <b>status</b> (idle, "
+                "live, plus the measured density matrix. Runs that measure the fidelity "
+                "only at the end (QX emulator, 3+3, 4+4) show the cost live and the "
+                "fidelity in a Final fidelity card when they finish.<br><br>"
+                "For a cloud backend it also shows the backend's <b>status</b> (idle, "
                 "busy, calibrating, benchmarking, offline) and a <b>Hardware jobs</b> "
                 "tab following every job from Queued to Results received. "
                 "<b>Stop</b> tries to delete the waiting job from the queue and tells "
@@ -331,20 +342,19 @@ class SetupWindow(QWidget):
 
     def _update_temperature(self):
         unit = self.kb_unit.currentData()
-        self.temperature_lbl.setText(format_temperature(self._beta_value(), unit))
+        set_tex(self.temperature_lbl, f"${format_temperature_tex(self._beta_value(), unit)}$",
+                Colors.ACCENT)
         _, k_b_text, _, energy_unit = KB_UNITS[unit]
-        self.kb_note.setText(
-            f"{k_b_text}.  T = 1/(k_B β), in units of the coupling g." if energy_unit is None
-            else f"{k_b_text}.  T = g/(k_B β), taking g = 1 {energy_unit}.")
+        self.kb_help.set_help(
+            rf"{k_b_text}. $T = 1/(k_B \beta)$, in units of the coupling $g$." if energy_unit is None
+            else rf"{k_b_text}. $T = g/(k_B \beta)$, taking $g$ = 1 {energy_unit}.")
 
-    def _update_iterations_note(self):
+    def _update_iterations_help(self):
         low = self.iterations.value() < MIN_SUGGESTED_ITERATIONS
-        self.iterations_note.setText(
+        self.iterations_help.set_help(
             f"An upper limit: the run may stop earlier once it converges. "
             f"At least {MIN_SUGGESTED_ITERATIONS} is suggested"
-            + (" — this may stop before converging." if low else "."))
-        self.iterations_note.setStyleSheet(
-            f"color: {Colors.WARN if low else Colors.TEXT_MUTED}; font-size: 10pt;")
+            + (" — this may stop before converging." if low else "."), warn=low)
 
     def _angle_spinbox(self) -> QDoubleSpinBox:
         box = QDoubleSpinBox()
@@ -377,7 +387,7 @@ class SetupWindow(QWidget):
         self._backend_name = name
         self._backend_name_lbl.setText(name)
         self.device_panel.set_backend(name, qi_backend)
-        self._real_hardware = not starmon7.is_starmon7(name)
+        self._remote = not backends.is_local(name)
         self._update_spin_choices()
         self._apply_hardware_mode()
 
@@ -385,19 +395,24 @@ class SetupWindow(QWidget):
         return self.spins.currentData()
 
     def _update_spin_choices(self):
-        """3+3 and 4+4 need Tuna-17 (see session.spins_allowed): grey the
+        """3+3 and 4+4 need Tuna-17 or QX (see session.spins_allowed): grey the
         sizes this backend can't run out, and fall back to 2+2 if needed."""
         model = self.spins.model()
         for row, n in enumerate(SPIN_CHOICES):
             model.item(row).setEnabled(spins_allowed(self._backend_name, n))
         if not spins_allowed(self._backend_name, self._n_spins()):
             self.spins.setCurrentIndex(SPIN_CHOICES.index(2))
-        if spins_allowed(self._backend_name, max(SPIN_CHOICES)):
-            self.spins_note.setText(
-                "3+3 and 4+4 measure the fidelity once, by tomography at the end "
+        sizes = "Spins per system: 2+2 = 4 qubits, 3+3 = 6, 4+4 = 8. "
+        if backends.is_qx(self._backend_name):
+            self.spins_help.set_help(
+                sizes + "On the QX emulator every size measures the fidelity once, by "
+                "tomography at the end (9 / 27 / 81 circuits).")
+        elif spins_allowed(self._backend_name, max(SPIN_CHOICES)):
+            self.spins_help.set_help(
+                sizes + "3+3 and 4+4 measure the fidelity once, by tomography at the end "
                 "(27 / 81 circuits).")
         else:
-            self.spins_note.setText("3+3 and 4+4 run on Tuna-17 only.")
+            self.spins_help.set_help(sizes + "3+3 and 4+4 run on Tuna-17 and the QX emulator only.")
         self.device_panel.set_spins(self._n_spins())
 
     def _on_spins_changed(self):
@@ -405,32 +420,46 @@ class SetupWindow(QWidget):
         self._apply_hardware_mode()
 
     def _apply_hardware_mode(self):
-        """Real devices run a cold start from random angles with SPSA (see
-        OptimizationWorker.run); lock the controls that don't apply."""
-        real = self._real_hardware
+        """Cloud backends (QX emulator, real hardware) run a cold start from
+        small random angles with SPSA (see OptimizationWorker.run); lock the
+        controls that don't apply."""
+        remote = self._remote
         n = self._n_spins()
-        self.hardware_banner.setText(
-            f"<b>Real quantum computer.</b> This {n}+{n}-qubit experiment will be "
-            f"sent to {self._backend_name}. It runs a cold start at the chosen β "
-            f"from random angles, using {HARDWARE_OPTIMIZER}.")
-        self.hardware_banner.setVisible(real)
-        self.angles_group.setEnabled(not real)
-        self.angles_lbl.setText(
-            f"{_ANGLES_TITLE} — random on real hardware" if real else _ANGLES_TITLE)
-        if real and self.optimizer.currentText() != HARDWARE_OPTIMIZER:
+        if backends.is_qx(self._backend_name):
+            color, rgb = Colors.ACCENT, "135, 206, 235"
+            headline = (f"<b>Cloud simulator.</b> This {n}+{n}-qubit experiment runs on "
+                        f"Quantum Inspire's noiseless QX emulator; its jobs wait in a queue.")
+        else:
+            color, rgb = Colors.WARN, "254, 138, 39"
+            headline = (f"<b>Real quantum computer.</b> This {n}+{n}-qubit experiment will "
+                        f"be sent to {self._backend_name}.")
+        self.hardware_banner.setStyleSheet(f"""
+            color: {Colors.TEXT}; background: rgba({rgb}, 0.12);
+            border: 1px solid {color}; border-radius: 8px; padding: 8px 10px;
+        """)
+        set_tex(self.hardware_banner, 
+            f"{headline} It runs a cold start at the chosen $\\beta$ from small random angles, "
+            f"using {HARDWARE_OPTIMIZER}.", Colors.TEXT)
+        self.hardware_banner.setVisible(remote)
+        self.angles_group.setEnabled(not remote)
+        set_tex(self.angles_lbl,
+                f"{_ANGLES_TITLE} — near 0, random (cold start)" if remote else _ANGLES_TITLE,
+                Colors.TEXT_DIM)
+        if remote and self.optimizer.currentText() != HARDWARE_OPTIMIZER:
             with QSignalBlocker(self.optimizer):
                 self.optimizer.setCurrentText(HARDWARE_OPTIMIZER)
 
     def _on_optimizer_changed(self, name: str):
-        if not self._real_hardware or name == HARDWARE_OPTIMIZER:
+        if not self._remote or name == HARDWARE_OPTIMIZER:
             return
         QMessageBox.information(
-            self, f"{HARDWARE_OPTIMIZER} is used on real hardware",
-            f"{HARDWARE_OPTIMIZER} is suggested for noisy setups like a real quantum "
-            f"computer: it estimates the gradient from just two noisy measurements "
-            f"per step, where {name} is easily misled by shot noise.\n\n"
-            f"Real hardware runs therefore always use {HARDWARE_OPTIMIZER}. Pick "
-            f"the Starmon-7 emulator to use {name}.")
+            self, f"{HARDWARE_OPTIMIZER} is used in the cloud",
+            f"{HARDWARE_OPTIMIZER} is suggested for noisy setups: it estimates the "
+            f"gradient from just two noisy measurements per step, where {name} is easily "
+            f"misled by noise. Real hardware has gate noise and shot noise, and the QX "
+            f"emulator has shot noise.\n\n"
+            f"Runs on {self._backend_name} therefore always use {HARDWARE_OPTIMIZER}. Pick "
+            f"the Starmon-7 simulator to use {name}.")
         with QSignalBlocker(self.optimizer):
             self.optimizer.setCurrentText(HARDWARE_OPTIMIZER)
 

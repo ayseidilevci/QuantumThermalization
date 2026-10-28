@@ -10,7 +10,7 @@ from qi2_shared.utils import run_async
 from qi_utilities.utility_functions.data_handling import StoreProjectRecord
 from qiskit_quantuminspire.qi_provider import QIProvider
 
-from backend import starmon7
+from backend import backends, starmon7
 
 
 @dataclass
@@ -22,14 +22,6 @@ class BackendInfo:
     # True for a device emulated on this machine (Starmon-7) rather than
     # served by the live QI API.
     local: bool = False
-
-
-def _is_allowed_live_backend(name: str) -> bool:
-    """Only the Tuna family is offered as a live backend; everything else
-    (QI's own emulators, retired devices, anything added later) is excluded
-    by default rather than by name-matching a blacklist."""
-    normalized = "".join(ch for ch in name.lower() if ch.isalnum())
-    return normalized in {"tuna5", "tuna9", "tuna17"}
 
 
 # The backend cards color three states; the API reports five (offline, idle,
@@ -200,7 +192,7 @@ class QuantumInspireManager:
         self.provider = QIProvider()
 
         for backend in self.provider.backends():
-            if not _is_allowed_live_backend(backend.name):
+            if backends.normalized(backend.name) not in backends.OFFERED_LIVE_BACKENDS:
                 continue
             backend_info = BackendInfo(
                 backend=backend,
@@ -217,7 +209,8 @@ class QuantumInspireManager:
 
     def submit_circuit(self, circuit, backend, wait=None):
         """
-        Submit a Qiskit QuantumCircuit to the selected QI backend.
+        Submit a Qiskit QuantumCircuit to the selected QI backend and return
+        (job, result). Errors propagate, so the caller can report why.
 
         wait(job) -> Result, if given, replaces job.result(): a real
         device's queue easily outlasts QIJob.result()'s 60 s default.
@@ -226,41 +219,24 @@ class QuantumInspireManager:
         print("========================================")
         print("Submitting circuit to Quantum Inspire")
         print("========================================")
-
         print("\nCircuit:")
         print(circuit)
-
         print("\nBackend:")
         print(backend)
 
-        try:
-            if starmon7.is_starmon7(getattr(backend, "name", None)):
-                circuit = starmon7.quantize_rotations(circuit)
-                job = backend.run(circuit, shots=backend.options.shots)
-            else:
-                job = backend.run(circuit)
+        if starmon7.is_starmon7(getattr(backend, "name", None)):
+            circuit = starmon7.quantize_rotations(circuit)
+            job = backend.run(circuit, shots=backend.options.shots)
+        else:
+            job = backend.run(circuit)
+        print("\nJob submitted successfully.\nWaiting for results...")
+        results = wait(job) if wait else job.result()
 
-            print("\nJob submitted successfully.")
-
-            print("\nWaiting for results...")
-            results = wait(job) if wait else job.result()
-
-            # A local SimulatorJob only fills circuits_run_data in result().
-            print("Job ID:", job.circuits_run_data[0].job_id)
-
-            print("\nResults:")
-            print(results)
-
-            print("\nResult data:")
-            print(results.data())
-
-            return job, results
-
-        except Exception as exc:
-            print("\nERROR submitting circuit:")
-            print(exc)
-
-            return None, None
+        # A local SimulatorJob only fills circuits_run_data in result().
+        print("Job ID:", job.circuits_run_data[0].job_id)
+        print("\nResults:")
+        print(results)
+        return job, results
 
     def get_backend(self, name=None):
 

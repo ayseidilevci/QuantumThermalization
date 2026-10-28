@@ -3,9 +3,9 @@ an interactive qubit-topology widget, where the user picks subsystem A (the
 chain A1..An) of the TFD ansatz by dragging or clicking, with the mirrored
 subsystem B (B1..Bn) filled in automatically.
 
-For the known chips (Tuna-5, Tuna-9, Tuna-17, Starmon-7) node coordinates and
-connectivity are hardcoded in KNOWN_BACKEND_TOPOLOGY, read off the schematics
-in Appdata/Img/. Any other backend falls back to the live QIBackend's coupling
+For the known backends (Tuna-9, Tuna-17, Starmon-7, QX emulator) node
+coordinates and connectivity are hardcoded in KNOWN_BACKEND_TOPOLOGY, read off
+the schematics in Appdata/Img/. Any other backend falls back to the live QIBackend's coupling
 map (backend_topology) on a plain grid (simple_grid_layout).
 """
 
@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget,
 )
 
-from backend import starmon7
+from backend import backends, starmon7
 from frontend.colors import Colors
 from frontend.session import roles
 
@@ -30,6 +30,16 @@ def required_pairs(n: int) -> list:
     and the rungs A_i–B_i (a 2 x n ladder)."""
     chain = [(f"{s}{i}", f"{s}{i + 1}") for s in "AB" for i in range(1, n)]
     return chain + [(f"A{i}", f"B{i}") for i in range(1, n + 1)]
+
+
+def qx_ladder(n: int):
+    """(coords, edges) drawing the QX emulator's fixed ladder (see
+    backends.qx_mapping): A1..An on top, B1..Bn below, rungs between."""
+    mapping = backends.qx_mapping(n)
+    coords = {q: ((int(role[1:]) - 1 - (n - 1) / 2) * 110, -60 if role[0] == "A" else 60)
+              for role, q in mapping.items()}
+    edges = {frozenset((mapping[a], mapping[b])) for a, b in required_pairs(n)}
+    return coords, edges
 
 
 def _role_color(role: str) -> str:
@@ -47,7 +57,6 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "Appdata" / "Img"
 # (see _lookup_by_name) since the exact string the QI API returns for a given
 # chip isn't guaranteed to match these display labels verbatim.
 BACKEND_IMAGES = {
-    "tuna5": DATA_DIR / "1766393003-tuna-5_schematic.svg",
     "tuna9": DATA_DIR / "1765992515-tuna9logo_v1.webp",
     "tuna17": DATA_DIR / "1772648307-tuna-17_schematic-svg.svg",
     "starmon7": DATA_DIR / "starmon-7_schematic.svg",
@@ -59,22 +68,13 @@ BACKEND_IMAGES = {
 # couplers in the pictures are the physical link for each edge here, not a
 # separate addressable qubit). Keyed the same fuzzy way as BACKEND_IMAGES.
 #
-# Tuna-5: an X — hub qubit 2 coupled to each of the 4 others.
 # Tuna-9 / Tuna-17: a diamond/checkerboard lattice — every qubit couples to
 # its diagonal neighbors one lattice-step away (see the schematics).
 # Starmon-7: two rhombi (0-2-5-3 and 1-3-6-4) sharing the central qubit 3;
 # edges come from backend/starmon7.py.
+# QX emulator: 10 qubits with all-to-all connectivity, shown as a 2 x 5 grid
+# whose couplings are enough for any 2+2, 3+3 or 4+4 ladder.
 KNOWN_BACKEND_TOPOLOGY = {
-    "tuna5": {
-        "coords": {
-            0: (-51, -87),
-            1: (52, -87),
-            2: (0, -28),
-            3: (-52, 88),
-            4: (52, 88),
-        },
-        "edges": [(2, 0), (2, 1), (2, 3), (2, 4)],
-    },
     "tuna9": {
         "coords": {
             0: (0, -160),
@@ -119,6 +119,10 @@ KNOWN_BACKEND_TOPOLOGY = {
             5: (-80, 80), 6: (80, 80),
         },
         "edges": starmon7.EDGES,
+    },
+    "qxemulator": {
+        "coords": {q: ((q % 5 - 2) * 90, -50 if q < 5 else 50) for q in range(10)},
+        "edges": [(q, q + 1) for q in (0, 1, 2, 3, 5, 6, 7, 8)] + [(q, q + 5) for q in range(5)],
     },
 }
 
@@ -607,6 +611,7 @@ class DevicePanel(QWidget):
         super().__init__()
         self._backend_name = None
         self._had_selection = False
+        self._qx = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -680,7 +685,7 @@ class DevicePanel(QWidget):
         self.image_btn.setChecked(mode == "image")
         self.interactive_btn.setChecked(mode == "interactive")
         self._stack.setCurrentWidget(self.image_view if mode == "image" else self.topology_view)
-        self.reset_btn.setVisible(mode == "interactive")
+        self.reset_btn.setVisible(mode == "interactive" and not self._qx)
 
     def clear_selection(self):
         self.topology_view.clear_selection()
@@ -704,6 +709,11 @@ class DevicePanel(QWidget):
                 f"  ·  decomposed: {', '.join(starmon7.DECOMPOSED_GATES)}"
                 f"  ·  emulated locally with calibrated noise.")
             self.spec_label.show()
+        elif backends.is_qx(name):
+            self.spec_label.setText(
+                "Quantum Inspire's noiseless cloud simulator: 10 qubits, all connected to "
+                "each other, up to 2048 shots per circuit.")
+            self.spec_label.show()
         else:
             self.spec_label.hide()
 
@@ -711,6 +721,12 @@ class DevicePanel(QWidget):
             self.status_label.setText(
                 "Backend changed — qubit selection cleared.")
         self._backend_name = name
+        self._qx = backends.is_qx(name)
+        self.reset_btn.setVisible(self.interactive_btn.isChecked() and not self._qx)
+        if self._qx:
+            self._show_qx_ladder(self.topology_view._n)
+            self._had_selection = False
+            return
 
         known = _lookup_by_name(name, KNOWN_BACKEND_TOPOLOGY) if name else None
         if known is not None:
@@ -725,6 +741,7 @@ class DevicePanel(QWidget):
                                      for j in range(4) if i != j}
             coords = None
 
+        self.topology_view._read_only = False
         self.topology_view.set_topology(num_qubits, edges, coords)
         self._had_selection = False
         self.mapping_changed.emit({})
@@ -733,10 +750,28 @@ class DevicePanel(QWidget):
         return self.topology_view.current_mapping()
 
     def set_spins(self, n: int):
-        self.topology_view.set_spins(n)
+        if self._qx:
+            self._show_qx_ladder(n)
+        else:
+            self.topology_view.set_spins(n)
+
+    def _show_qx_ladder(self, n: int):
+        """QX emulator: no picking. Every qubit is connected, and the run
+        always uses backends.qx_mapping (see there why), so that ladder is
+        shown, fixed: A on top, B below."""
+        view = self.topology_view
+        coords, edges = qx_ladder(n)
+        view._n = n
+        view.set_topology(2 * n, edges, coords)
+        view.set_assignment(backends.qx_mapping(n))
+        view._read_only = True
+        self.status_label.setText(
+            f"The QX emulator connects every qubit, so the ladder is fixed: qubits "
+            f"0–{2 * n - 1} in the circuit's own order.")
 
     def set_assignment(self, mapping: dict):
-        self.topology_view.set_assignment(mapping)
+        if not self._qx:   # QX's ladder is fixed (see _show_qx_ladder)
+            self.topology_view.set_assignment(mapping)
 
     def _note_selection_made(self, mapping: dict):
         self._had_selection = bool(mapping)

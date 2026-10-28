@@ -16,10 +16,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from backend.experiment_manager import ExperimentManager, ExperimentRecord
+from backend.experiment_manager import RESULTS_FILENAME, ExperimentManager, ExperimentRecord
 from frontend.colors import Colors
+from frontend.latex import set_tex
 from frontend.session import SessionConfig, format_beta, roles
-from frontend.upload import load_session_dialog
+from frontend.upload import open_saved_file_dialog
 
 
 def _row_widget(title: str, detail: list, subtitle: str) -> QWidget:
@@ -31,9 +32,10 @@ def _row_widget(title: str, detail: list, subtitle: str) -> QWidget:
     title_lbl.setStyleSheet(f"color: {Colors.TEXT}; font-weight: 600;")
     lay.addWidget(title_lbl)
     for line in detail:
-        detail_lbl = QLabel(line)
+        detail_lbl = QLabel()
         detail_lbl.setStyleSheet(f"color: {Colors.ACCENT}; font-size: 9pt;")
         detail_lbl.setWordWrap(True)
+        set_tex(detail_lbl, line, Colors.ACCENT)
         lay.addWidget(detail_lbl)
     sub_lbl = QLabel(subtitle)
     sub_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 8pt;")
@@ -53,7 +55,7 @@ def _describe(record: ExperimentRecord) -> tuple[str, list, str]:
     n = int(settings.get("n_spins", 2))
     params = [
         f"{n}+{n} qubits",
-        f"β={format_beta(beta)}" if isinstance(beta, (int, float)) else None,
+        rf"$\beta = {format_beta(beta)}$" if isinstance(beta, (int, float)) else None,
         settings.get("optimizer"),
         f"{settings['iterations']} iter" if "iterations" in settings else None,
     ]
@@ -69,11 +71,13 @@ def _describe(record: ExperimentRecord) -> tuple[str, list, str]:
         outcome.append(f"cost {results['final_cost']:.3f}")
     optimized = results.get("optimized_params")
     if isinstance(optimized, dict) and optimized:
-        outcome.append("γ₁, γ₂, α₁, α₂ = " + ", ".join(
+        outcome.append(r"$\gamma_1, \gamma_2, \alpha_1, \alpha_2$ = " + ", ".join(
             f"{optimized[k]:.3f}" for k in ("gamma1", "gamma2", "alpha1", "alpha2")
             if k in optimized))
     if record.shots:
         outcome.append(f"{record.shots} shots")
+    if (record.folder / RESULTS_FILENAME).exists():
+        outcome.append("results saved — click to view")
 
     detail = ["  ·  ".join(p for p in params if p)]
     if outcome:
@@ -103,7 +107,8 @@ class UploadBrowserWindow(QWidget):
     """Experiment history (filtered by a search box) shown between Home's
     Load click and Setup."""
 
-    session_loaded = Signal(object)   # SessionConfig
+    session_loaded = Signal(object)   # SessionConfig -> Setup
+    results_loaded = Signal(object)   # saved results -> Run screen
 
     def __init__(self):
         super().__init__()
@@ -131,7 +136,7 @@ class UploadBrowserWindow(QWidget):
         search_row.setSpacing(8)
 
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Filter by date, backend, optimizer, β…")
+        self.search_box.setPlaceholderText("Filter by date, backend, optimizer, beta…")
         self.search_box.setStyleSheet(f"""
             QLineEdit {{
                 background: {Colors.BG_3}; color: {Colors.TEXT};
@@ -143,8 +148,8 @@ class UploadBrowserWindow(QWidget):
         self.search_box.textChanged.connect(self._apply_filter)
         search_row.addWidget(self.search_box, stretch=1)
 
-        browse_btn = QPushButton("Browse…")
-        browse_btn.setToolTip("Load a session .json file saved somewhere else")
+        browse_btn = QPushButton("Open file…")
+        browse_btn.setToolTip("Open saved results (or settings) from a file")
         browse_btn.setCursor(Qt.PointingHandCursor)
         browse_btn.setStyleSheet(f"""
             QPushButton {{
@@ -195,7 +200,9 @@ class UploadBrowserWindow(QWidget):
         self._rows = []
         for record in self.experiments.list_experiments():
             title, detail, subtitle = _describe(record)
-            search_text = " ".join([title, *detail, subtitle, record.project_name]).lower()
+            # Search the math as words: "$\beta = 1$" matches "beta = 1".
+            plain = [line.replace("$", "").replace("\\", "") for line in detail]
+            search_text = " ".join([title, *plain, subtitle, record.project_name]).lower()
             self._rows.append((search_text, title, detail, subtitle, record))
         self._apply_filter()
 
@@ -231,6 +238,24 @@ class UploadBrowserWindow(QWidget):
 
     def _on_item_clicked(self, item: QListWidgetItem):
         record = item.data(Qt.UserRole)
+        results = record.saved_results
+        if results is not None:
+            box = QMessageBox(self)
+            box.setWindowTitle("Open experiment")
+            box.setText("<b>Open this experiment</b>")
+            box.setInformativeText(
+                "View its results as they were when it finished, or use its settings "
+                "to set up a new run.")
+            view = box.addButton("View results", QMessageBox.AcceptRole)
+            reuse = box.addButton("Use these settings", QMessageBox.ActionRole)
+            box.addButton(QMessageBox.Cancel)
+            box.setDefaultButton(view)
+            box.exec()
+            if box.clickedButton() is view:
+                self.results_loaded.emit(results)
+                return
+            if box.clickedButton() is not reuse:
+                return
         try:
             config = SessionConfig.from_json_dict(record.settings)
         except Exception as exc:
@@ -241,6 +266,8 @@ class UploadBrowserWindow(QWidget):
         self.session_loaded.emit(config)
 
     def _on_browse_manually(self):
-        config = load_session_dialog(self)
-        if config is not None:
-            self.session_loaded.emit(config)
+        opened = open_saved_file_dialog(self)
+        if opened is None:
+            return
+        kind, data = opened
+        (self.results_loaded if kind == "results" else self.session_loaded).emit(data)

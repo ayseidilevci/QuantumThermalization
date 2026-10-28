@@ -25,6 +25,10 @@ PROJECTS_PATH = Path.home() / "Documents" / "QuantumInspireProjects"
 
 SETTINGS_FILENAME = "tfd_experiment.json"
 
+# The run's full results (curves, density matrices, counts, outcome), as the
+# Run screen saves them, so Past Experiments can show the run again.
+RESULTS_FILENAME = "tfd_results.json"
+
 
 @dataclass
 class ExperimentRecord:
@@ -43,6 +47,12 @@ class ExperimentRecord:
         results = self.settings.get("results")
         return results if isinstance(results, dict) else {}
 
+    @property
+    def saved_results(self) -> dict | None:
+        """The full results file (see RESULTS_FILENAME), if this run has one."""
+        data = _read_json(self.folder / RESULTS_FILENAME)
+        return data if isinstance(data, dict) else None
+
 
 def write_experiment_settings(project_dir, settings: dict) -> Path:
     """Write the app's settings/results for one experiment into its
@@ -50,6 +60,15 @@ def write_experiment_settings(project_dir, settings: dict) -> Path:
     path = Path(project_dir) / SETTINGS_FILENAME
     with path.open("w", encoding="utf-8") as file:
         json.dump(settings, file, indent=2)
+    return path
+
+
+def write_results(project_dir, snapshot: dict) -> Path:
+    """Write the Run screen's full results (ExperimentWindow.snapshot) into
+    the experiment's project folder."""
+    path = Path(project_dir) / RESULTS_FILENAME
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(snapshot, file)
     return path
 
 

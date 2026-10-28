@@ -40,6 +40,13 @@ def run():
             color: {Colors.TEXT};
             font-family: {Fonts.FAMILY};
         }}
+        QToolTip {{
+            background-color: {Colors.BG_2};
+            color: {Colors.TEXT};
+            border: 1px solid {Colors.ACCENT};
+            border-radius: 6px;
+            padding: 6px 8px;
+        }}
     """)
 
     # Backend
@@ -142,6 +149,12 @@ def run():
         setup.set_tutorial_visible(False)
         show_setup()
 
+    def open_saved_results(snapshot):
+        if not confirm_leave_run():
+            return
+        experiment.show_saved_results(snapshot)
+        show_run()
+
     def open_setup_from_home(config, show_tutorial):
         if config is not None:
             load_config_into_setup(config)
@@ -169,6 +182,7 @@ def run():
 
     # Upload browser -> Setup
     upload_browser.session_loaded.connect(load_config_into_setup)
+    upload_browser.results_loaded.connect(open_saved_results)
 
     # Backend Select -> Setup
     backend_select.backend_chosen.connect(start_setup_from_backend_select)
@@ -177,8 +191,9 @@ def run():
     setup.change_backend.connect(show_backend_select)
     setup.run_requested.connect(start_run_from_setup)
 
-    # Run -> Setup
-    experiment.back_to_setup.connect(go_to_setup_from_run)
+    # Run -> Setup, from the top bar's Back to Setup (shown on the Run screen only)
+    topbar.back_clicked.connect(go_to_setup_from_run)
+    stack.currentChanged.connect(lambda _: topbar.set_back_visible(stack.currentWidget() is experiment))
 
     # Persistent top bar -> Home, from anywhere (guarded while a run is live)
     topbar.home_clicked.connect(go_home_from_anywhere)

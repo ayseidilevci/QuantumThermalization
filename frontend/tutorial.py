@@ -15,6 +15,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
 from frontend.colors import Colors
+from frontend.latex import set_tex
 
 
 @dataclass
@@ -158,8 +159,8 @@ class TutorialCard(QWidget):
 
     def set_content(self, title: str, text: str, step_no: int, total: int, can_back: bool, is_last: bool):
         self.step_lbl.setText(f"STEP {step_no} OF {total}")
-        self.title_lbl.setText(title)
-        self.body_lbl.setText(text)
+        set_tex(self.title_lbl, title)
+        set_tex(self.body_lbl, text, Colors.TEXT_DIM)
         self.body_scroll.verticalScrollBar().setValue(0)
         self.back_btn.setEnabled(can_back)
         self.next_btn.setText("Finish" if is_last else "Next")

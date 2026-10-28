@@ -19,7 +19,9 @@ import numpy as np
 from matplotlib.colors import to_rgb
 from matplotlib.font_manager import FontProperties
 from matplotlib.mathtext import MathTextParser
-from PySide6.QtGui import QFont, QFontInfo, QGuiApplication, QImage
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QFontInfo, QGuiApplication, QImage, QPixmap
+from PySide6.QtWidgets import QLabel
 
 from frontend.colors import Colors
 
@@ -113,17 +115,53 @@ def _img(tex: str, px: float, text_px: float, color: str,
     return f'<img src="{src}" width="{w}" height="{h}" style="vertical-align: middle">'
 
 
-def tex_html(text: str, px: int, color: str = Colors.TEXT, max_width: int | None = None) -> str:
-    """Replace the $...$ / $$...$$ spans in `text` (Qt rich text) with
-    rendered images, for text drawn at `px` pixels (see font_px). Display
-    formulas wider than `max_width` pixels are typeset smaller to fit."""
-
+def _inline_sub(px: int, color: str):
     def inline(match):
         # Qt ignores white-space: nowrap on spans, so trailing punctuation is
         # typeset inside the formula (braced, so mathtext doesn't space it as an
         # operator) to keep it from wrapping onto a line of its own.
         punctuation = "".join(f"{{{c}}}" for c in match.group(2))
         return _img(match.group(1).strip() + punctuation, px * _INLINE_SIZE, px, color)
+    return inline
+
+
+def inline_tex(text: str, px: int, color: str = Colors.TEXT) -> str:
+    """Only the inline $...$ spans of `text` as images, with no paragraph
+    blocks around it: for short labels, form rows and popups."""
+    return _INLINE.sub(_inline_sub(px, color), text)
+
+
+def set_tex(label: QLabel, text: str, color: str = Colors.TEXT):
+    """`label` shows `text` (rich text) with its $...$ spans typeset, at the
+    label's own font size."""
+    label.ensurePolished()
+    label.setTextFormat(Qt.RichText)
+    label.setText(inline_tex(text, font_px(label.font().pointSizeF()), color))
+
+
+@lru_cache(maxsize=None)
+def tex_pixmap(tex: str, px: int, color: str = Colors.TEXT) -> QPixmap:
+    """One formula (no $ delimiters) as a pixmap, for widgets that paint
+    their own text."""
+    path, _, _ = _render(tex, px * _INLINE_SIZE, px, color)
+    n = _pixel_ratio()
+    pixmap = QPixmap(path if n == 1 else path.replace(".png", f"@{n}x.png"))
+    pixmap.setDevicePixelRatio(n)
+    return pixmap
+
+
+def tex_label(text: str, color: str = Colors.TEXT) -> QLabel:
+    label = QLabel()
+    set_tex(label, text, color)
+    return label
+
+
+def tex_html(text: str, px: int, color: str = Colors.TEXT, max_width: int | None = None) -> str:
+    """Replace the $...$ / $$...$$ spans in `text` (Qt rich text) with
+    rendered images, for text drawn at `px` pixels (see font_px). Display
+    formulas wider than `max_width` pixels are typeset smaller to fit."""
+
+    inline = _inline_sub(px, color)
 
     # Every prose run and every display formula gets its own block: Qt's
     # HTML parser otherwise lets prose that starts with an <img> after a

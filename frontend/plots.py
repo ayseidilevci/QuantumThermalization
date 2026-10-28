@@ -1,12 +1,17 @@
 """Shared matplotlib canvas, axis styling and card panel, styled with
 frontend.colors.Colors so every plot matches the rest of the app."""
 
+import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from frontend.colors import Colors
+
+# Math in plot labels ($...$) in Computer Modern, like the rest of the app's
+# math (see frontend/latex.py).
+matplotlib.rcParams["mathtext.fontset"] = "cm"
 
 
 class MplCanvas(FigureCanvas):

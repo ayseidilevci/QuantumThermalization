@@ -41,32 +41,35 @@ python main.py
 Log in with your Quantum Inspire account: the app shows a verification code and opens the Quantum Inspire login page in your browser. Then:
 
 1. **Home** explains the physics, with flash cards on the key concepts. Choose **Start**, **Past Experiments** or **Tutorial**.
-2. **Backend:** pick the Starmon-7 emulator or a real Tuna device. A real device asks for confirmation first.
+2. **Backend:** pick a real device (Tuna-9, Tuna-17) or a simulator (Starmon-7, noisy and local; QX emulator, noiseless and in the cloud). A real device asks for confirmation first.
 3. **Setup:** choose the system size, β (0, 0.5, 1, 2, 3, 4 or 5, with the matching temperature shown), the units of the Boltzmann constant, the optimizer and the maximum number of iterations, then pick the qubits on the chip. **Tutorial** walks through every control.
-4. **Run:** live cost and fidelity plots, the target and measured density matrices, and the final measurement counts.
+4. **Run:** live cost and fidelity plots, the target and measured density matrices, and the final measurement counts. Runs that measure the fidelity only at the end (every QX run, 3+3 and 4+4) show a Final fidelity card (fidelity, purity and the target's purity) in place of the fidelity plot.
 
-Each run is saved under `~/Documents/QuantumInspireProjects/` and can be reopened from **Past Experiments**.
+Each run is saved under `~/Documents/QuantumInspireProjects/`. In **Past Experiments**, click a run to view its results again (every plot, the density matrices, counts and outcome, as they were when it finished) or to reuse its settings. **Save results** on the Run screen saves the whole run to a file of your choice, reopened with **Open file…** in Past Experiments, plus every plot (PNG) and its data (CSV) in a folder next to it.
 
-### Emulator and real hardware
+### Backends
 
-| | Starmon-7 emulator | Real device (Tuna-9, Tuna-17) |
-|---|---|---|
-| Cost evaluations | ideal local simulation | on the device, one queued job per iteration |
-| Protocol | chain: β ≈ 0 → 0.5 → 1 → target, each step warm-started | cold start: straight at the target β from random angles |
-| Optimizer | COBYLA or SPSA | SPSA (suggested for noisy measurements) |
-| Final counts | Starmon-7 noise model | measured on the device |
+| | Starmon-7 | QX emulator | Real hardware (Tuna-9, Tuna-17) |
+|---|---|---|---|
+| Kind | noisy simulator, on this computer | noiseless simulator, in Quantum Inspire's cloud | real quantum computer |
+| Cost evaluations | ideal local simulation | in the cloud, one queued job per iteration | on the device, one queued job per iteration |
+| Protocol | chain: β ≈ 0 → 0.5 → 1 → target, each step warm-started | cold start: straight at the target β from small random angles near θ = 0 | cold start |
+| Optimizer | COBYLA or SPSA | SPSA (copes with shot noise) | SPSA (copes with gate and shot noise) |
+| Final counts | Starmon-7 noise model | simulated, noiseless | measured on the device |
 
-During a real-device run the left sidebar shows the device's live status (idle, busy, calibrating, benchmarking or offline), and the **Hardware jobs** tab follows every job from Queued to Results received. **Stop** tries to delete the waiting job from the device's queue and reports whether Quantum Inspire accepted.
+Tuna-5 isn't offered: its star-shaped chip has no 2 × 2 ladder of coupled qubits. The QX emulator allows at most 2048 shots per circuit, so runs there use 2048.
+
+During a cloud run (QX or real hardware) the left sidebar shows the backend's live status (idle, busy, calibrating, benchmarking or offline), and the **Cloud jobs** / **Hardware jobs** tab follows every job from Queued to Results received. **Stop** tries to delete the waiting job from the queue and reports whether Quantum Inspire accepted. A strip along the bottom of the Run screen shows the run's progress: one dot per β stage, a checkered flag at the finish, and the elapsed time.
 
 ### System size
 
-| | Qubits | Devices | Fidelity |
+| | Qubits | Backends | Fidelity |
 |---|---|---|---|
-| 2+2 | 4 | Starmon-7, Tuna-9, Tuna-17 | measured live, every iteration |
-| 3+3 | 6 | Tuna-17 | tomography at the end (27 circuits) |
-| 4+4 | 8 | Tuna-17 | tomography at the end (81 circuits) |
+| 2+2 | 4 | all | measured live, every iteration (on the QX emulator: tomography at the end, 9 circuits) |
+| 3+3 | 6 | QX emulator, Tuna-17 | tomography at the end (27 circuits) |
+| 4+4 | 8 | QX emulator, Tuna-17 | tomography at the end (81 circuits) |
 
-The ansatz needs a 2 × n ladder of coupled qubits: pick the chain A1…An on the chip, and the mirrored chain B is found automatically. Tuna-5's star-shaped chip has no such ladder, so it can't run the experiment.
+The ansatz needs a 2 × n ladder of coupled qubits: pick the chain A1…An on the chip, and the mirrored chain B is found automatically. On the QX emulator the ladder is fixed to qubits 0…2n−1: QX connects every qubit and reports results by qubit number, so only that layout reads back correctly. For the same reason every size on QX uses circuits that measure each qubit once, at the end.
 
 ## Project structure
 
@@ -78,8 +81,10 @@ frontend/                  PySide6 screens and widgets
   setup.py                 experiment settings and the qubit picker (device_panel.py)
   experiment.py            Run screen and the optimization worker
   hardware_panels.py       device status and Hardware jobs tab
+  progress_bar.py          the Run screen's progress strip
   session.py               experiment settings (SessionConfig) and their JSON format
 backend/
+  backends.py              backend kinds: local simulator, cloud simulator, real hardware
   qi_manager.py            Quantum Inspire login, backends, job submission and cancellation
   starmon7.py              local Starmon-7 emulator
   spsa.py                  SPSA optimizer

@@ -1,10 +1,11 @@
 """Backend-selection screen, shown between Home's Start/Tutorial and Setup.
 
-One vertical (portrait) card per live backend, all in a single row that
-fills the full width and height below the header — N backends divide the
-row into N equal-width columns (see BackendSelectWindow's QGridLayout), a
-thin vertical rule separating the live QI device columns from the locally
-emulated Starmon-7 (see backend/starmon7.py). Each card's chip schematic (or a placeholder
+One vertical (portrait) card per backend, all in a single row that fills
+the full width and height below the header — N backends divide the row into
+N equal-width columns (see BackendSelectWindow's QGridLayout), a thin
+vertical rule separating real hardware from the simulators (the local noisy
+Starmon-7 and the cloud's noiseless QX emulator; see backend/backends.py).
+Each card's chip schematic (or a placeholder
 for a device we ship none for) fills it as a background image, colored if
 the backend is online/busy and grayscale if it's offline
 (backend.qi_manager.classify_backend_status is the "which devices are
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from backend import starmon7
+from backend import backends
 from backend.qi_manager import STATE_OFFLINE, STATE_ONLINE, classify_backend_status
 from frontend.colors import Colors
 from frontend.device_panel import BACKEND_IMAGES, _lookup_by_name
@@ -120,7 +121,10 @@ class BackendCard(QFrame):
         """)
         self._scrim.setAttribute(Qt.WA_TransparentForMouseEvents)
 
-        self._name_label = QLabel(info.name, self)
+        self._name_label = QLabel(
+            f"{info.name}<br><span style='font-size:9.5pt; font-weight:400; color:{Colors.TEXT_DIM};'>"
+            f"{backends.description(info.name)}</span>", self)
+        self._name_label.setTextFormat(Qt.RichText)
         self._name_label.setAlignment(Qt.AlignCenter)
         name_font = QFont()
         name_font.setPointSize(13)
@@ -314,7 +318,8 @@ class BackendSelectWindow(QWidget):
         for info in self.manager.backends:
             card = BackendCard(info)
             card.clicked.connect(self._on_card_clicked)
-            (emulated if info.local else devices).append(card)
+            (devices if backends.is_hardware(info.name) else emulated).append(card)
+        emulated.sort(key=lambda card: not backends.is_local(card.info.name))  # Starmon-7 first
 
         # Replacing the scroll area's widget drops the previous one (and its
         # cards) along with it — simplest way to rebuild cleanly on refresh.
@@ -335,7 +340,7 @@ class BackendSelectWindow(QWidget):
 
         col = 0
         if devices:
-            grid.addWidget(_group_title("Quantum devices"), 0, col, 1, len(devices))
+            grid.addWidget(_group_title("Real hardware"), 0, col, 1, len(devices))
             for card in devices:
                 grid.addWidget(card, 1, col)
                 grid.setColumnStretch(col, 1)
@@ -347,7 +352,7 @@ class BackendSelectWindow(QWidget):
             col += 1
 
         if emulated:
-            grid.addWidget(_group_title("Emulated device"), 0, col, 1, len(emulated))
+            grid.addWidget(_group_title("Simulators"), 0, col, 1, len(emulated))
             for card in emulated:
                 grid.addWidget(card, 1, col)
                 grid.setColumnStretch(col, 1)
@@ -358,7 +363,7 @@ class BackendSelectWindow(QWidget):
         return content
 
     def _on_card_clicked(self, name: str, qi_backend):
-        if not starmon7.is_starmon7(name) and not self._confirm_real_device(name):
+        if backends.is_hardware(name) and not self._confirm_real_device(name):
             return
         self.backend_chosen.emit(name, qi_backend)
 
@@ -370,8 +375,8 @@ class BackendSelectWindow(QWidget):
         box.setInformativeText(
             "Experiments on it are sent to Quantum Inspire's real hardware. Jobs "
             "wait in the device's queue, so a run can take significantly longer "
-            "than on the emulator.\n\n"
-            "Real hardware runs use a cold start from random angles with SPSA.")
+            "than on a simulator.\n\n"
+            "Real hardware runs use a cold start from small random angles with SPSA.")
         go = box.addButton("Use this device", QMessageBox.AcceptRole)
         box.addButton("Choose another", QMessageBox.RejectRole)
         box.setDefaultButton(go)

@@ -17,9 +17,10 @@ SESSION_SCHEMA_VERSION = 1
 # 3+3 and 4+4 use the n+n generalisation in tfd_study/ (model.py).
 SPIN_CHOICES = (2, 3, 4)
 
-# 3+3 and 4+4 run on Tuna-17 only. By connectivity alone Tuna-9 could host a
-# 3+3 ladder too; it's left out by choice, so this is the one place to change.
-MULTI_SPIN_BACKENDS = ("tuna17",)
+# 3+3 and 4+4 run on Tuna-17 and the QX emulator. By connectivity alone Tuna-9
+# could host a 3+3 ladder too; it's left out by choice, so this is the one
+# place to change.
+MULTI_SPIN_BACKENDS = ("tuna17", "qxemulator")
 
 
 def roles(n: int) -> tuple:
@@ -42,11 +43,19 @@ DEFAULT_START_ANGLE = 0.1
 HARDWARE_OPTIMIZER = "SPSA"
 
 
-def random_start_angles(rng) -> np.ndarray:
-    """Random initial (γ₁, γ₂, α₁, α₂) for a cold start: each |angle| uniform
-    in [0.1, π] with a random sign, which stays clear of the all-zero saddle
-    (same draw as gibbs_tfd_reproduction/experiments/reproducibility_check.py)."""
-    return rng.uniform(0.1, np.pi, size=4) * rng.choice([-1.0, 1.0], size=4)
+# Spread of the cold start's random angles around θ = 0 (rad), as the
+# tfd-study branch's runs used.
+COLD_START_SPREAD = 0.4
+
+
+def cold_start_angles(rng) -> np.ndarray:
+    """Initial (γ₁, γ₂, α₁, α₂) for a cold start: small random angles around
+    θ = 0. θ = 0 is the exact β = 0 state (Bell pairs) and the solution at any
+    β is a smooth deformation of it, so starting nearby lands in the right
+    valley; fully random angles get stuck in poor local minima for 3+3 and
+    4+4 (median fidelity 0.84 and 0.58 instead of 0.97 and 0.94, in a
+    2048-shot simulation at β = 1). Not exactly 0: a saddle of the cost."""
+    return rng.normal(0.0, COLD_START_SPREAD, size=4)
 
 
 # Selectable inverse temperatures, in units of 1/g (g = the transverse
@@ -59,14 +68,12 @@ BETA_ZERO = 1e-8
 # key -> (short label, k_B as text, k_B, energy unit of g). Outside natural
 # units the coupling g is taken as 1 of that energy unit, so T is in kelvin.
 KB_UNITS = {
-    "natural": ("Natural", "k_B = 1", 1.0, None),
-    "eV": ("eV/K", "k_B = 8.617×10⁻⁵ eV/K", 8.617333262e-5, "eV"),
-    "GHz": ("GHz/K", "k_B/h = 20.84 GHz/K", 20.83661912, "GHz"),
-    "J": ("J/K", "k_B = 1.381×10⁻²³ J/K", 1.380649e-23, "J"),
+    "natural": ("Natural", "$k_B = 1$", 1.0, None),
+    "eV": ("eV/K", r"$k_B = 8.617\times10^{-5}$ eV/K", 8.617333262e-5, "eV"),
+    "GHz": ("GHz/K", "$k_B/h = 20.84$ GHz/K", 20.83661912, "GHz"),
+    "J": ("J/K", r"$k_B = 1.381\times10^{-23}$ J/K", 1.380649e-23, "J"),
 }
 DEFAULT_KB_UNIT = "natural"
-
-_SUPERSCRIPT = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 
 def nearest_beta_choice(beta: float) -> float:
@@ -78,23 +85,24 @@ def format_beta(beta: float) -> str:
     return "0" if beta <= BETA_ZERO else f"{beta:g}"
 
 
-def _format_number(value: float) -> str:
+def _tex_number(value: float) -> str:
     if 100 <= abs(value) < 1e4:
         return f"{value:.0f}"
     if 1e-2 <= abs(value) < 100:
         return f"{value:.3g}"
     mantissa, exponent = f"{value:.2e}".split("e")
-    return f"{mantissa}×10{str(int(exponent)).translate(_SUPERSCRIPT)}"
+    return rf"{mantissa}\times10^{{{int(exponent)}}}"
 
 
-def format_temperature(beta: float, kb_unit: str = DEFAULT_KB_UNIT) -> str:
-    """T = 1 / (k_B beta) for display, e.g. "T = 0.5 g/k_B" or "T ≈ 1.16×10⁴ K"."""
+def format_temperature_tex(beta: float, kb_unit: str = DEFAULT_KB_UNIT) -> str:
+    """T = 1 / (k_B beta) as mathtext (no $ delimiters), e.g. "T = 0.5\\,g/k_B"
+    or "T \\approx 1.16\\times10^{4}\\,\\mathrm{K}"."""
     if beta <= BETA_ZERO:
-        return "T → ∞"
+        return r"T \to \infty"
     _, _, k_b, energy_unit = KB_UNITS.get(kb_unit, KB_UNITS[DEFAULT_KB_UNIT])
     if energy_unit is None:
-        return f"T = {_format_number(1 / beta)} g/k_B"
-    return f"T ≈ {_format_number(1 / (k_b * beta))} K"
+        return rf"T = {_tex_number(1 / beta)}\,g/k_B"
+    return rf"T \approx {_tex_number(1 / (k_b * beta))}\,\mathrm{{K}}"
 
 
 @dataclass

@@ -131,6 +131,8 @@ class DeviceStatusWidget(QFrame):
             text, color, hint = _DEVICE_STATES.get(
                 value, (value.title() or "Unknown", Colors.TEXT_MUTED, ""))
             self._state.setText(f"{self._name}: {text}")
+            if message.strip().rstrip(":").strip().lower() == self._name.lower():
+                message = ""   # QX's message is just its own name
             self._hint.setText("\n".join(part for part in (hint, message) if part))
             self._set_dot(color)
         self._updated.setText(f"Updated {datetime.now().strftime('%H:%M:%S')}")
@@ -148,6 +150,7 @@ class HardwareJobsView(QWidget):
     def __init__(self):
         super().__init__()
         self._rows = {}
+        self._infos = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 14, 20, 20)
@@ -188,13 +191,19 @@ class HardwareJobsView(QWidget):
         layout.addWidget(self.table, stretch=1)
         self.clear()
 
+    def jobs(self) -> list:
+        """The latest info dict of every job, in table order."""
+        return [self._infos[n] for n in sorted(self._infos)]
+
     def clear(self):
         self._rows.clear()
+        self._infos = {}
         self.table.setRowCount(0)
         self._update_summary()
 
     def update_job(self, info: dict):
         n = info["n"]
+        self._infos[n] = dict(info)
         if n not in self._rows:
             self._rows[n] = self.table.rowCount()
             self.table.insertRow(self._rows[n])
