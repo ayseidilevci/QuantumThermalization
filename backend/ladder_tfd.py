@@ -52,6 +52,8 @@ class LadderTFD:
         self.max_circuits = max_circuits or 5
         self._mats = None
         self._calibrated_at = None
+        # The latest losses() call's mean all-Z distribution, for a live histogram.
+        self.last_z_probs = None
 
     # ---- jobs ------------------------------------------------------------
     def _run(self, circuits, purpose):
@@ -90,6 +92,7 @@ class LadderTFD:
         """C_s(beta) at every point, measured on the device."""
         circuits = [model.measured(self.n, self.p, x, basis) for x in points for basis in "ZX"]
         probs = self._corrected(circuits, purpose)
+        self.last_z_probs = np.mean(probs[0::2], axis=0)
         return [model.loss(model.loss_terms(probs[2 * i], probs[2 * i + 1], self.n), beta, self.varsigma)
                 for i in range(len(points))]
 

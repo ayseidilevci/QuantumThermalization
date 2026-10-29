@@ -43,74 +43,58 @@ DEFAULT_START_ANGLE = 0.1
 HARDWARE_OPTIMIZER = "SPSA"
 
 
-# Spread of the cold start's random angles around θ = 0 (rad), as the
-# tfd-study branch's runs used.
-COLD_START_SPREAD = 0.4
+# Spread of the cloud runs' random starting angles around θ = 0 (rad), as
+# the tfd-study branch's runs used.
+RANDOM_START_SPREAD = 0.4
 
 
-def cold_start_angles(rng) -> np.ndarray:
-    """Initial (γ₁, γ₂, α₁, α₂) for a cold start: small random angles around
+def random_start_angles(rng) -> np.ndarray:
+    """Initial (γ₁, γ₂, α₁, α₂) for a cloud run: small random angles around
     θ = 0. θ = 0 is the exact β = 0 state (Bell pairs) and the solution at any
     β is a smooth deformation of it, so starting nearby lands in the right
     valley; fully random angles get stuck in poor local minima for 3+3 and
     4+4 (median fidelity 0.84 and 0.58 instead of 0.97 and 0.94, in a
     2048-shot simulation at β = 1). Not exactly 0: a saddle of the cost."""
-    return rng.normal(0.0, COLD_START_SPREAD, size=4)
+    return rng.normal(0.0, RANDOM_START_SPREAD, size=4)
 
 
-# Selectable inverse temperatures, in units of 1/g (g = the transverse
-# field of the Hamiltonian). beta = 0 itself can't be optimized — the cost's
-# beta^-1.57 term diverges — so choosing 0 runs at BETA_ZERO instead.
-BETA_CHOICES = (0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0)
+# Allowed maximum iterations: values typed or loaded outside are set to the nearest limit.
+MIN_ITERATIONS = 5
+MAX_ITERATIONS = 2000
+
+# Inverse temperature β, unitless: energies in units of the
+# Hamiltonian's own scale (g = 1) and k_B = 1, so β and T = 1/β are plain
+# numbers. Any β in [BETA_ZERO, BETA_MAX] can be typed. β = 0 itself can't be
+# optimized (the cost's β^-1.57 term diverges), so the minimum is just above it.
+BETA_MAX = 5.0
 BETA_ZERO = 1e-8
 
-# Boltzmann-constant unit systems for displaying T = 1 / (k_B beta):
-# key -> (short label, k_B as text, k_B, energy unit of g). Outside natural
-# units the coupling g is taken as 1 of that energy unit, so T is in kelvin.
-KB_UNITS = {
-    "natural": ("Natural", "$k_B = 1$", 1.0, None),
-    "eV": ("eV/K", r"$k_B = 8.617\times10^{-5}$ eV/K", 8.617333262e-5, "eV"),
-    "GHz": ("GHz/K", "$k_B/h = 20.84$ GHz/K", 20.83661912, "GHz"),
-    "J": ("J/K", r"$k_B = 1.381\times10^{-23}$ J/K", 1.380649e-23, "J"),
-}
-DEFAULT_KB_UNIT = "natural"
 
-
-def nearest_beta_choice(beta: float) -> float:
-    """Snap a (possibly older, free-form) beta to the closest selectable value."""
-    return min(BETA_CHOICES, key=lambda choice: abs(choice - beta))
+def clamp_beta(value: float) -> float:
+    """β as the run uses it: clamped into [BETA_ZERO, BETA_MAX]."""
+    return max(BETA_ZERO, min(BETA_MAX, float(value)))
 
 
 def format_beta(beta: float) -> str:
-    return "0" if beta <= BETA_ZERO else f"{beta:g}"
+    """Plain decimals (0.00000001, not 1e-08), up to 12 significant digits."""
+    return np.format_float_positional(float(f"{beta:.12g}"), trim="-")
 
 
-def _tex_number(value: float) -> str:
-    if 100 <= abs(value) < 1e4:
-        return f"{value:.0f}"
-    if 1e-2 <= abs(value) < 100:
-        return f"{value:.3g}"
-    mantissa, exponent = f"{value:.2e}".split("e")
-    return rf"{mantissa}\times10^{{{int(exponent)}}}"
-
-
-def format_temperature_tex(beta: float, kb_unit: str = DEFAULT_KB_UNIT) -> str:
-    """T = 1 / (k_B beta) as mathtext (no $ delimiters), e.g. "T = 0.5\\,g/k_B"
-    or "T \\approx 1.16\\times10^{4}\\,\\mathrm{K}"."""
-    if beta <= BETA_ZERO:
-        return r"T \to \infty"
-    _, _, k_b, energy_unit = KB_UNITS.get(kb_unit, KB_UNITS[DEFAULT_KB_UNIT])
-    if energy_unit is None:
-        return rf"T = {_tex_number(1 / beta)}\,g/k_B"
-    return rf"T \approx {_tex_number(1 / (k_b * beta))}\,\mathrm{{K}}"
+def format_temperature_tex(beta: float) -> str:
+    """T = 1/β (unitless) as mathtext, without $ delimiters."""
+    mantissa, _, exponent = f"{1 / beta:.4g}".partition("e")
+    if exponent:
+        number = (rf"10^{{{int(exponent)}}}" if mantissa == "1"
+                  else rf"{mantissa}\times10^{{{int(exponent)}}}")
+    else:
+        number = mantissa
+    return rf"T = 1/\beta = {number}"
 
 
 @dataclass
 class SessionConfig:
     backend_name: str = "Starmon-7"
     beta: float = 1.0
-    # Only changes how the temperature is displayed, not the optimization.
-    kb_unit: str = DEFAULT_KB_UNIT
     optimizer: str = "COBYLA"
     iterations: int = 200
 
@@ -137,7 +121,6 @@ class SessionConfig:
             "schema_version": SESSION_SCHEMA_VERSION,
             "backend_name": self.backend_name,
             "beta": self.beta,
-            "kb_unit": self.kb_unit,
             "optimizer": self.optimizer,
             "iterations": self.iterations,
             "n_spins": self.n_spins,
@@ -154,10 +137,10 @@ class SessionConfig:
         # in the file so a future loader can branch on it.
         return cls(
             backend_name=str(data.get("backend_name", "Starmon-7")),
-            beta=float(data.get("beta", 1.0)),
-            kb_unit=str(data.get("kb_unit", DEFAULT_KB_UNIT)),
-            optimizer=str(data.get("optimizer", "COBYLA")),
-            iterations=int(data.get("iterations", 200)),
+            beta=clamp_beta(data.get("beta", 1.0)),
+            # Runs saved with an optimizer no longer offered (BFGS) reuse COBYLA.
+            optimizer=data.get("optimizer") if data.get("optimizer") in ("COBYLA", "SPSA") else "COBYLA",
+            iterations=min(MAX_ITERATIONS, max(MIN_ITERATIONS, int(data.get("iterations", 200)))),
             n_spins=int(data.get("n_spins", 2)),
             gamma1=float(data.get("gamma1", DEFAULT_START_ANGLE)),
             gamma2=float(data.get("gamma2", DEFAULT_START_ANGLE)),

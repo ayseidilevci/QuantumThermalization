@@ -5,7 +5,9 @@ import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+)
 
 from frontend.colors import Colors
 
@@ -98,3 +100,49 @@ def panel(title: str, widget: QWidget, on_save=None) -> QFrame:
 
     lay.addWidget(widget, stretch=1)
     return box
+
+
+class FlipView(QStackedWidget):
+    """A measured plot and, flipped over, the exact target it should match,
+    sharing one card; flip_button() goes in the card's head."""
+
+    def __init__(self, measured: MplCanvas, exact: MplCanvas):
+        super().__init__()
+        self.measured, self.exact = measured, exact
+        self.addWidget(measured)
+        self.addWidget(exact)
+        self.button = QPushButton()
+        self.button.setCursor(Qt.PointingHandCursor)
+        self.button.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {Colors.ACCENT}; border: 1px solid {Colors.ACCENT};
+                border-radius: 8px; padding: 4px 12px; font-weight: 600;
+            }}
+            QPushButton:hover {{ background: rgba(135,206,235,0.12); }}
+        """)
+        self.button.clicked.connect(self.flip)
+        self.show_measured()
+
+    @property
+    def exact_shown(self) -> bool:
+        return self.currentWidget() is self.exact
+
+    def canvases(self) -> list:
+        return [self.measured, self.exact]
+
+    def show_measured(self):
+        self.setCurrentWidget(self.measured)
+        self.button.setText("⇄  Exact target")
+        self.button.setToolTip("Show the exact result this experiment aims for")
+
+    def flip(self):
+        if self.exact_shown:
+            self.show_measured()
+        else:
+            self.setCurrentWidget(self.exact)
+            self.button.setText("⇄  Measured")
+            self.button.setToolTip("Back to the measured result")
+        self.currentWidget().draw_idle()
+
+    def draw_idle(self):
+        self.currentWidget().draw_idle()

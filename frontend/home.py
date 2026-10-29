@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QScrollArea, QSi
 from frontend.colors import Colors
 from frontend.flashcards import FlashCardGrid
 from frontend.latex import font_px, tex_html
+from frontend.loop_diagram import LoopDiagram
 
 SIDEBAR_WIDTH = 300
 
@@ -130,6 +131,15 @@ class HomeWindow(QWidget):
                 main_layout.addWidget(self._paragraph(text))
                 main_layout.addSpacing(12)
             main_layout.addSpacing(16)
+
+        # The variational loop as it runs on every backend; the Run screen's
+        # How it works tab has the steps for the chosen one.
+        main_layout.addWidget(self._section_heading("How it works"))
+        main_layout.addSpacing(12)
+        self.loop_view = LoopDiagram(scrollable=False)
+        self.loop_view.set_general()
+        main_layout.addWidget(self.loop_view)
+        main_layout.addSpacing(32)
 
         # Flash cards
         cards_header = QHBoxLayout()

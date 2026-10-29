@@ -1,5 +1,5 @@
 """The Run screen's always-visible progress strip: what the run is doing now,
-a track with one dot per β stage, and the elapsed time."""
+a track marked with the run's β, and the elapsed time."""
 
 import time
 
@@ -141,7 +141,8 @@ class RunProgressBar(QWidget):
         self.track.stage = min(self.track.stage + 1, len(self._betas) - 1)
         self._stage_base = self._last_iteration
         set_tex(self._title, f"Optimizing at ${_beta_label(beta)}$")
-        self._detail.setText(f"Stage {self.track.stage + 1} of {len(self._betas)}")
+        self._detail.setText(f"Stage {self.track.stage + 1} of {len(self._betas)}"
+                             if len(self._betas) > 1 else "")
         self._refresh()
 
     def iteration(self, cumulative: int):

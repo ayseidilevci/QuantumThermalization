@@ -376,7 +376,7 @@ class BackendSelectWindow(QWidget):
             "Experiments on it are sent to Quantum Inspire's real hardware. Jobs "
             "wait in the device's queue, so a run can take significantly longer "
             "than on a simulator.\n\n"
-            "Real hardware runs use a cold start from small random angles with SPSA.")
+            "Real hardware runs start from small random angles and use SPSA.")
         go = box.addButton("Use this device", QMessageBox.AcceptRole)
         box.addButton("Choose another", QMessageBox.RejectRole)
         box.setDefaultButton(go)

@@ -38,6 +38,9 @@ class CostFunction:
         self.iteration = 0
         self.cost_history = []
         self.tomography_history = []
+        # The latest evaluation's readout-corrected all-Z distribution (index:
+        # bit q = qubit q), for a live measurement histogram.
+        self.last_z_probs = None
         self.subsystem_qubits = subsystem_qubits
 
         # Progress log: one line per cost evaluation, so a crash or Ctrl-C
@@ -131,6 +134,7 @@ class CostFunction:
 
         x_probs = apply_readout_assignment_correction(x_probs, self.ro_matrices, [0,1,2,3])
         z_probs = apply_readout_assignment_correction(z_probs, self.ro_matrices, [0,1,2,3])
+        self.last_z_probs = z_probs
 
         exp_X_A = observable_expectation_values_Z_basis([x_probs], "IIZI")[0] + observable_expectation_values_Z_basis([x_probs], "IIIZ")[0]
         exp_X_B = observable_expectation_values_Z_basis([x_probs], "ZIII")[0] + observable_expectation_values_Z_basis([x_probs], "IZII")[0]

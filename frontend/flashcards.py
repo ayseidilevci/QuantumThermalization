@@ -81,17 +81,12 @@ FLASHCARDS = (
      "$$U = \\prod_{k=1}^{p} e^{-i\\alpha_k H_2}\\, e^{-i\\gamma_k H_1}$$"
      "A classical optimizer tunes the angles from measurements. Here "
      "$H_1 = H_A + H_B$, $H_2 = H_{BA}$ and $p = 1$."),
-    ("Algorithm", "What is a chain experiment?",
-     "Optimize at a ladder of temperatures, each step starting from the "
-     "previous step's optimum (a warm start):"
-     "$$\\beta \\approx 0 \\;\\to\\; 0.5 \\;\\to\\; 1 \\;\\to\\; \\beta_{\\mathrm{target}}$$"
-     "It starts near the known $\\beta = 0$ solution. This app uses it on the emulator."),
-    ("Algorithm", "What is a cold start?",
-     "One optimization straight at $\\beta_{\\mathrm{target}}$, from small random angles "
-     "near the $\\beta = 0$ solution:"
+    ("Algorithm", "Where does the optimizer start?",
+     "Every run is one optimization straight at $\\beta_{\\mathrm{target}}$. In the cloud it "
+     "starts from small random angles near the $\\beta = 0$ solution:"
      "$$\\gamma_i,\\ \\alpha_i \\sim \\mathcal{N}(0,\\, 0.4)$$"
-     "No chain, so far fewer cloud jobs. Fully random angles would often get stuck "
-     "in a poor local minimum for 3+3 and 4+4. This app uses it in the cloud, with SPSA."),
+     "Fully random angles would often get stuck in a poor local minimum with 3 or 4 spins per system. "
+     "On Starmon-7 it starts from the angles set in Setup."),
     ("Results", "How is success measured?",
      "Fidelity (Eq. 11) and purity (Eq. 12):"
      "$$F = \\mathrm{Tr}\\sqrt{\\sqrt{\\rho_G}\\,\\rho_{\\mathrm{Exp}}\\sqrt{\\rho_G}}$$"

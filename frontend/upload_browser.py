@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from backend.experiment_manager import RESULTS_FILENAME, ExperimentManager, ExperimentRecord
+from backend.experiment_manager import ExperimentManager, ExperimentRecord
 from frontend.colors import Colors
 from frontend.latex import set_tex
 from frontend.session import SessionConfig, format_beta, roles
@@ -26,66 +26,49 @@ from frontend.upload import open_saved_file_dialog
 def _row_widget(title: str, detail: list, subtitle: str) -> QWidget:
     row = QWidget()
     lay = QVBoxLayout(row)
-    lay.setContentsMargins(10, 6, 10, 6)
-    lay.setSpacing(2)
+    lay.setContentsMargins(12, 9, 12, 9)
+    lay.setSpacing(3)
     title_lbl = QLabel(title)
-    title_lbl.setStyleSheet(f"color: {Colors.TEXT}; font-weight: 600;")
+    title_lbl.setStyleSheet(f"color: {Colors.TEXT}; font-size: 12pt; font-weight: 600;")
     lay.addWidget(title_lbl)
-    for line in detail:
+    for line, color in zip(detail, (Colors.ACCENT, Colors.TEXT_DIM)):
         detail_lbl = QLabel()
-        detail_lbl.setStyleSheet(f"color: {Colors.ACCENT}; font-size: 9pt;")
-        detail_lbl.setWordWrap(True)
-        set_tex(detail_lbl, line, Colors.ACCENT)
+        detail_lbl.setStyleSheet(f"color: {color}; font-size: 10.5pt;")
+        if "$" in line:
+            set_tex(detail_lbl, line, color)
+        else:
+            detail_lbl.setText(line)
         lay.addWidget(detail_lbl)
     sub_lbl = QLabel(subtitle)
-    sub_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 8pt;")
-    sub_lbl.setWordWrap(True)
+    sub_lbl.setStyleSheet(f"color: {Colors.TEXT_MUTED}; font-size: 9.5pt;")
     lay.addWidget(sub_lbl)
     return row
 
 
 def _describe(record: ExperimentRecord) -> tuple[str, list, str]:
-    """(title, detail lines, subtitle) for one experiment's history row."""
-    settings, results = record.settings, record.results
-    when = (record.timestamp.strftime("%d %b %Y, %H:%M") if record.timestamp
-            else record.folder.parent.name)
-    title = f"{when}  ·  {record.backend_name}"
+    """(title, detail lines, subtitle) for one experiment's history row: the
+    device, the chosen setup and the date. Results show once it's opened."""
+    settings = record.settings
+    n = int(settings.get("n_spins", 2))
+    title = f"{record.backend_name}  ·  {n} spins per system"
 
     beta = settings.get("beta")
-    n = int(settings.get("n_spins", 2))
-    params = [
-        f"{n}+{n} qubits",
+    setup = [
         rf"$\beta = {format_beta(beta)}$" if isinstance(beta, (int, float)) else None,
         settings.get("optimizer"),
-        f"{settings['iterations']} iter" if "iterations" in settings else None,
+        f"{settings['iterations']} iterations" if "iterations" in settings else None,
     ]
+    detail = ["  ·  ".join(p for p in setup if p)]
     mapping = settings.get("qubit_mapping")
     if isinstance(mapping, dict) and mapping:
-        params.append("qubits " + " ".join(
-            f"{role}→{mapping[role]}" for role in roles(n) if role in mapping))
+        detail.append("Qubits: " + ",  ".join(
+            f"{role} → {mapping[role]}" for role in roles(n) if role in mapping))
 
-    outcome = []
-    if isinstance(results.get("fidelity"), (int, float)):
-        outcome.append(f"fidelity {results['fidelity']:.3f}")
-    if isinstance(results.get("final_cost"), (int, float)):
-        outcome.append(f"cost {results['final_cost']:.3f}")
-    optimized = results.get("optimized_params")
-    if isinstance(optimized, dict) and optimized:
-        outcome.append(r"$\gamma_1, \gamma_2, \alpha_1, \alpha_2$ = " + ", ".join(
-            f"{optimized[k]:.3f}" for k in ("gamma1", "gamma2", "alpha1", "alpha2")
-            if k in optimized))
-    if record.shots:
-        outcome.append(f"{record.shots} shots")
-    if (record.folder / RESULTS_FILENAME).exists():
-        outcome.append("results saved — click to view")
-
-    detail = ["  ·  ".join(p for p in params if p)]
-    if outcome:
-        detail.append("  ·  ".join(outcome))
-
-    subtitle = str(record.folder)
     if record.timestamp:
-        subtitle += f"  ·  {_friendly_time(record.timestamp)}"
+        ago = _friendly_time(record.timestamp)
+        subtitle = record.timestamp.strftime("%d %b %Y, %H:%M") + (f"  ·  {ago}" if ago else "")
+    else:
+        subtitle = record.folder.parent.name
     return title, detail, subtitle
 
 
@@ -100,7 +83,7 @@ def _friendly_time(dt: datetime) -> str:
         return f"{int(seconds // 3600)} h ago"
     if seconds < 86400 * 30:
         return f"{int(seconds // 86400)} d ago"
-    return dt.strftime("%Y-%m-%d")
+    return ""   # the full date is shown already
 
 
 class UploadBrowserWindow(QWidget):
@@ -252,6 +235,8 @@ class UploadBrowserWindow(QWidget):
             box.setDefaultButton(view)
             box.exec()
             if box.clickedButton() is view:
+                # Results saved before the snapshot kept its folder.
+                results["project_dir"] = results.get("project_dir") or str(record.folder)
                 self.results_loaded.emit(results)
                 return
             if box.clickedButton() is not reuse:
