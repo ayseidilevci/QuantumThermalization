@@ -30,9 +30,8 @@ angles with error mitigation). Plans are the JSON files in `tfd_study/`.
 | `4p4_mitigated` | `mitig-hw_n4_20261028_054813`: qubits 4-8-12-15 / 7-11-14-16, native, β = 0.5, 1, 2, 5, 3 repeats. |
 | `3p3_spsa_user_qubits` | `tfd_n3p1_20261028_084445`: SPSA as in `hardware_plan.json`, on 8-12-15 / 11-14-16 (`hardware_plan_3_userqubits.json`). |
 | `4p4_spsa_user_qubits` | `tfd_n4p1_20261028_104418`: SPSA as in `hardware_plan_4.json`, on 4-8-12-15 / 7-11-14-16 (`hardware_plan_4_userqubits.json`). |
+| `3p3_4p4_user_qubits_comparison` | Plots comparing the runs on the user's qubits: `ideal_classical_spsa.png`, fidelity versus β for the ideal simulation, the noiseless-optimal angles on Tuna-17 (`3p3_mitigated/..._200737`, `4p4_mitigated`) and SPSA on Tuna-17 (`*_spsa_user_qubits`) (`plot_ideal_classical_spsa.py`); `loss_hw_3p3_4p4.png`, the loss along the SPSA runs per step, with the same angles evaluated without noise and the noiseless-optimal angles' loss measured on the device (`plot_loss_hw.py`). |
 
-The two `*_user_qubits` runs were still running when they were copied here (28 Oct 2026); they will be updated
-when they finish.
 
 In the mitigated runs every tomography has its own readout calibration, and `state.json` stores each result with
 no, per-qubit and full readout correction; `compiled.jsonl` holds the circuits as submitted.
