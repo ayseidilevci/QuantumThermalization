@@ -244,6 +244,8 @@ def backend_topology(qi_backend):
 # =========================================================================
 
 _NODE_RADIUS = 22.0
+# Largest magnification of the interactive picker (see QubitTopologyWidget._fit).
+_MAX_ZOOM = 1.4
 
 
 def find_mirror_chain(a_chain: list, edges: set):
@@ -296,6 +298,9 @@ class QubitTopologyWidget(QGraphicsView):
         self.setScene(QGraphicsScene(self))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumHeight(160)
+        # _fit scales the chip to the view, so it never needs scrolling.
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self._edges = set()
         self._coords = {}
@@ -465,8 +470,18 @@ class QubitTopologyWidget(QGraphicsView):
         self._fit()
 
     def _fit(self):
-        if self._read_only and not self.scene().sceneRect().isEmpty():
-            self.fitInView(self.scene().sceneRect(), Qt.KeepAspectRatio)
+        rect = self.scene().sceneRect()
+        if rect.isEmpty():
+            return
+        if self._read_only:
+            self.fitInView(rect, Qt.KeepAspectRatio)
+            return
+        # The picker grows with the window, up to _MAX_ZOOM so a small chip
+        # (Starmon-7) doesn't turn into giant circles.
+        zoom = min(self.viewport().width() / rect.width(), self.viewport().height() / rect.height())
+        self.resetTransform()
+        self.scale(min(zoom, _MAX_ZOOM), min(zoom, _MAX_ZOOM))
+        self.centerOn(rect.center())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

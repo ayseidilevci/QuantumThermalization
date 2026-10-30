@@ -200,7 +200,9 @@ def _plot_help(config: SessionConfig, ladder: bool) -> tuple:
         fidelity = (
             "<b>Measured every iteration</b><br>"
             "Each iteration also measures the current state by tomography (9 measurement "
-            "settings) and compares it with the exact Gibbs state. $F = 1$ is a perfect match.")
+            "settings) and compares it with the exact Gibbs state: "
+            r"$F = \mathrm{Tr}\sqrt{\sqrt{\rho_G}\,\rho\,\sqrt{\rho_G}}$, as in Sagastizabal et al. "
+            "$F = 1$ is a perfect match.")
         if backends.is_local(device):
             cost = (
                 "<b>What each point is</b><br>"
@@ -240,6 +242,14 @@ def _tfd_probabilities(gibbs: np.ndarray) -> dict:
     nbits = 2 * (dim.bit_length() - 1)
     return {format(a + dim * b, f"0{nbits}b"): float(abs(root[a, b]) ** 2)
             for a in range(dim) for b in range(dim) if abs(root[a, b]) ** 2 > 1e-12}
+
+
+def _fidelity(rho, target) -> float:
+    """F = Tr sqrt(sqrt(target) rho sqrt(target)), the convention of
+    Sagastizabal et al. and of the report: the square root of qiskit's
+    state_fidelity. Linear-inversion tomography can make rho slightly
+    unphysical, so negative rounding is clipped before the root."""
+    return float(np.sqrt(max(0.0, state_fidelity(DensityMatrix(rho), DensityMatrix(target), validate=False))))
 
 
 def _probability_dict(probs, nbits: int) -> dict:
@@ -547,9 +557,8 @@ class OptimizationWorker(QObject):
                 if rho_a is not None:
                     if iteration[0] % rho_every == 0:
                         self.rho_progress.emit(rho_a)
-                    tgt = DensityMatrix(tfd_model.gibbs_state(n, beta))
-                    fid = state_fidelity(DensityMatrix(rho_a), tgt, validate=False)
-                    self.fidelity_progress.emit(iteration[0], float(fid))
+                    fid = _fidelity(rho_a, tfd_model.gibbs_state(n, beta))
+                    self.fidelity_progress.emit(iteration[0], fid)
             except Exception:
                 pass  # a live preview glitch shouldn't kill the optimization
 
@@ -668,7 +677,7 @@ class OptimizationWorker(QObject):
         warnings = []
         if target is not None:
             try:
-                fidelity = float(state_fidelity(DensityMatrix(rho_final), target, validate=False))
+                fidelity = _fidelity(rho_final, target)
             except Exception as exc:
                 warnings.append(f"The final fidelity couldn't be computed: {exc}")
         else:
